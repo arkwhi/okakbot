@@ -1,27 +1,9 @@
-import telebot
-
-# вставь сюда свой токен от BotFather
-TOKEN = "8381916674:AAF35FVmUDtRhUsSZCxmDxfPUJMGTPe02t8"
-
-bot = telebot.TeleBot(TOKEN)
-
-# реакция на команду /start
-@bot.message_handler(commands=['ogo'])
-def start_message(message):
-    bot.send_message(message.chat.id, "Привет!")
-    
-@bot.message_handler(func=lambda message: message.text and message.text.lower() == "окак")
-def reply_to_okak(message):
-    bot.reply_to(message, f"@{message.from_user.username} тру окак фан")
-    
-@bot.message_handler(commands=['hello'])
-def hello_user(message):
-    bot.reply_to(message, f"Привет, {message.from_user.first_name}!")
-    
-@bot.message_handler(commands=['bye'])
-def hello_user(message):
-    bot.reply_to(message, f"Пока, {message.from_user.first_name}:(")
-
-# запуск бота
-bot.remove_webhook()
-bot.polling()
+import telebot as C,logging as A
+from config import TOKEN
+from handlers import register_handlers as D
+A.basicConfig(level=A.INFO,format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',handlers=[A.FileHandler('bot.log'),A.StreamHandler()])
+B=A.getLogger(__name__)
+def E():
+	try:A=C.TeleBot(TOKEN);D(A);B.info('Бот запускается...');A.remove_webhook();A.polling(none_stop=True,interval=0)
+	except Exception as E:B.error(f"Ошибка при запуске бота: {E}")
+if __name__=='__main__':E()
