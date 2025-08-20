@@ -20,7 +20,7 @@ def set_spok_handler(bot,message):
 def spok_handler(bot,message):
 	register_user(message);spok_message=db.get_personal_message(message.from_user.id,_A)
 	if spok_message:
-		if message.reply_to_message and message.reply_to_message.from_user.username:response_text=f"@{message.reply_to_message.from_user.username} 🌙 {spok_message}"
+		if message.reply_to_message and message.reply_to_message.from_user.username:response_text=f"@{message.from_user.username}", f"говорит всем (или не всем): 🌙 {spok_message}"
 		else:response_text=f"🌙 {spok_message}"
 		bot.reply_to(message,response_text)
 	else:bot.reply_to(message,'❗ У вас нет сохранённого пожелания спокойной ночи!\n\nИспользуйте /set_spok [текст] чтобы сохранить своё пожелание.')

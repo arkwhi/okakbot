@@ -28,6 +28,7 @@ def E():
 
         B.info('Бот запускается...')
         A.remove_webhook()
+        A.get_updates(offset=-1)
         A.polling(none_stop=True, interval=0)
     except Exception as E:
         B.error(f"Ошибка при запуске бота: {E}")

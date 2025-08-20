@@ -24,3 +24,62 @@ class Database:
 		try:
 			with self.get_connection()as conn:result=conn.execute('\n                    SELECT 1 FROM users WHERE user_id = ?\n                ',(user_id,)).fetchone();return result is not None
 		except Exception as e:logging.error(f"Ошибка при проверке пользователя: {e}");return _A
+		
+#деньги
+def init_database(self):
+    try:
+        with self.get_connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS personal_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    message_type TEXT,
+                    message_text TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (user_id)
+                )
+            """)
+            # новая таблица для валюты
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS balances (
+                    user_id INTEGER PRIMARY KEY,
+                    balance INTEGER DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES users (user_id)
+                )
+            """)
+            conn.commit()
+            logging.info("База данных инициализирована успешно")
+    except Exception as e:
+        logging.error(f"Ошибка при инициализации базы данных: {e}")
+
+def get_balance(self, user_id):
+    try:
+        with self.get_connection() as conn:
+            result = conn.execute("SELECT balance FROM balances WHERE user_id = ?", (user_id,)).fetchone()
+            return result[0] if result else 0
+    except Exception as e:
+        logging.error(f"Ошибка при получении баланса: {e}")
+        return 0
+
+def update_balance(self, user_id, amount):
+    try:
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO balances (user_id, balance)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET balance = balance + excluded.balance
+            """, (user_id, amount))
+            conn.commit()
+            return True
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении баланса: {e}")
+        return False
