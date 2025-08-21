@@ -777,8 +777,126 @@ def topst_handler(bot, message, limit=10):
         log.error(f"topst err: {e}")
         bot.reply_to(message, "❌ Ошибка при получении топа")
 
-# === Регистрация ===
+# === Регистрация всех хэндлеров ===
 def register_extra_handlers(bot):
+
+    # ID и инфо
+    @bot.message_handler(commands=['id'])
+    def _h_id(m): id_handler(bot, m)
+
+    @bot.message_handler(commands=['whoami'])
+    def _h_whoami(m): whoami_handler(bot, m)
+
+    # Реакция на "спасибо"
+    @bot.message_handler(func=lambda m: isinstance(m.text, str) and m.text.lower() == "спасибо")
+    def _h_thanks(m): thanks_handler(bot, m)
+
+    # Баланс
+    @bot.message_handler(commands=['balance'])
+    def _h_balance(m): balance_handler(bot, m)
+
+    # Просьба денег на улице (/bomj)
+    @bot.message_handler(commands=['bomj'])
+    def _h_bomj(m): street_handler(bot, m)
+
+    # Игры
+    @bot.message_handler(commands=['pocket'])
+    def _h_pocket(m): _play_game(
+        bot, m,
+        chance=0.69, multiplier=1.4,
+        win_texts=[
+            "😎Молодец, воришка. Ты потерял свои деньги на ходу, но получил больше - аж {win} бублей!",
+            "✨❄️Моя школа! {win} тебе начислено за твой проворот."
+        ],
+        lose_texts=[
+            "🙄Ну ты и лоханулся... мало того, что ты ничего не украл, так у тебя украли {bet}!",
+            "🤵Мафия тобой разочарована. Мы оштрафовали тебя на {bet}, чтоб не втыкал."
+        ]
+    )
+
+    @bot.message_handler(commands=['casino'])
+    def _h_casino(m): _play_game(
+        bot, m,
+        chance=0.35, multiplier=3.0,
+        win_texts=[
+            "🎰 Джекпот! {win} бублей за ставку {bet}.",
+            "🎲 Везёт! Забираешь {win} бублей (ставка {bet})."
+        ],
+        lose_texts=[
+            "🃏 Крупье улыбается… Ставка {bet} ушла в дом.",
+            "💸 Рулетка безжалостна. Минус {bet}."
+        ]
+    )
+
+    @bot.message_handler(commands=['loto'])
+    def _h_loto(m): _play_game(
+        bot, m,
+        chance=0.08, multiplier=18.0,
+        win_texts=[
+            "🎟 Счастливый билет! +{win} бублей (ставка {bet}).",
+            "🌟 Умный человек в очках выиграл {win} бублей скачать обои"
+        ],
+        lose_texts=[
+            "🪙 Ой-ой-ой, не повезло. Ставка в аж {bet} бублей ушла в воздух.",
+            "🙃 Сегодня не твой день. Минус {bet}."
+        ]
+    )
+
+    # Перевод денег ("дать @вася 100")
+    @bot.message_handler(func=lambda m: isinstance(m.text, str) and m.text.lower().startswith("дать "))
+    def _h_transfer(m): transfer_handler(bot, m)
+
+    # Покупка/работы недвижимости
+    @bot.message_handler(commands=['buy'])
+    def _h_buy(m): buy_property_handler(bot, m)
+
+    @bot.message_handler(commands=['mafia'])
+    def _h_mafia(m): mafia_handler(bot, m)
+
+    @bot.message_handler(commands=['clean'])
+    def _h_clean(m): clean_handler(bot, m)
+
+    # Ник и "о себе"
+    @bot.message_handler(func=lambda m: isinstance(m.text, str) and re.match(r"(?i)^окак\s+ник\s+(.+)$", m.text.strip()))
+    def _h_setnick(m): set_nick_handler(bot, m)
+
+    @bot.message_handler(commands=['osebe'])
+    def _h_osebe(m): osebe_handler(bot, m)
+
+    # Топы
+    @bot.message_handler(commands=['topbubl'])
+    def _h_topbubl(m): topbubl_handler(bot, m)
+
+    @bot.message_handler(commands=['topsf'])
+    def _h_topsf(m): topsf_handler(bot, m)
+
+    @bot.message_handler(commands=['topst'])
+    def _h_topst(m): topst_handler(bot, m)
+
+    # Админские команды
+    @bot.message_handler(func=lambda m: isinstance(m.text, str) and m.text.lower().startswith("/add_bubl"))
+    def _h_add(m): add_bubl_handler(bot, m)
+
+    @bot.message_handler(func=lambda m: isinstance(m.text, str) and m.text.lower().startswith("/remove_bubl"))
+    def _h_remove(m): remove_bubl_handler(bot, m)
+
+    @bot.message_handler(commands=['xhp'])
+    def _h_xhp(m): xhp_handler(bot, m)
+
+    # Дуэли
+    @bot.message_handler(commands=['sf'])
+    def _h_sf(m): sf_command_handler(bot, m)
+
+    @bot.message_handler(commands=['sf_accept'])
+    def _h_sf_accept(m): sf_accept_handler(bot, m)
+
+    @bot.message_handler(commands=['sf_decline'])
+    def _h_sf_decline(m): sf_decline_handler(bot, m)
+
+    @bot.message_handler(commands=['bet'])
+    def _h_bet(m): bet_handler(bot, m)
+# === Регистрация ===
+'''def register_extra_handlers(bot):
     @bot.message_handler(commands=['id'])        ; def _(m): id_handler(bot,m)
     @bot.message_handler(commands=['whoami'])    ; def _(m): whoami_handler(bot,m)
     @bot.message_handler(func=lambda m: m.text and m.text.lower()=="спасибо") ; def _(m): thanks_handler(bot,m)
@@ -825,7 +943,7 @@ def register_extra_handlers(bot):
 #
 @bot.message_handler(commands=['topst']);def _h_topst(m): topst_handler(bot, m)
 
-
+'''
 
 
 
