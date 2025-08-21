@@ -7,7 +7,7 @@ def start_handler(bot,message):register_user(message);bot.send_message(message.c
 
 Доступные команды:
 📋 /help - показать все команды""")
-def help_handler(bot,message):help_text="😳Ну вот, все команды бота: \n\n 🍎/help - Показать все команды \n🪙/bomj - Бомжуй и получай деньги! \n🤵/pocket - Возьми с собой чуть-чуть денег, и попробуй своровать с карманов чужаков. \n🎰/casino - Самое жестокое испытание каждого человека \n😵‍💫/loto - До последних денег покупай билеты, ведь ты выиграешь! \n🪤/balance - Посмотри в свою шляпу, бомж \n💰/topbubl - Посмотри топ богачей. \n🪩Дать <@ник> <количество> - Подари денег кому-нибудь \n🛖🏢/buy_hut и /buy_communal - Покупай недвижку за 20к и 95к чтобы открыть новые работы. \n 🥷🧽/mafia и /clean - Работы по недвижимости \n🌚/whoami, /id, /osebe - Кто ты? Твой айди. О тебе \n🌝Окак ник <ник> - Поставь себе ник!\n 🚬/luck - Испытай настоящий рандом!\n🏏/sf @<ник> - Вызови кого-то на уличную драку! \n💸/bet @<юзернейм> <количество> - Поставь денег на своего любимчика, и может даже выиграй!\n💎/topsf, /topst - Топ самых отбитых драчунов и самых заядлых ставочников!\n🤔 Админские команды: \n/xhp, /wipebubl, /add_bubl, /remove_bubl \n\n💖Ждите новых Окак обновлений!\n ";bot.send_message(message.chat.id,help_text)
+def help_handler(bot,message):help_text="😳Ну вот, все команды бота: \n\n 🍎/help - Показать все команды \n🪙/bomj - Бомжуй и получай деньги! \n🤵/pocket - Возьми с собой чуть-чуть денег, и попробуй своровать с карманов чужаков. \n🎰/casino - Самое жестокое испытание каждого человека \n😵‍💫/loto - До последних денег покупай билеты, ведь ты выиграешь! \n🪤/balance - Посмотри в свою шляпу, бомж \n💰/topbubl - Посмотри топ богачей. \n🪩Дать <@ник> <количество> - Подари денег кому-нибудь \n🛖🏢/buy_hut и /buy_communal - Покупай недвижку за 20к и 95к чтобы открыть новые работы. \n 🥷🧽/mafia и /clean - Работы по недвижимости \n🌚/whoami, /id, /osebe - Кто ты? Твой айди. О тебе \n🌝Окак ник <ник> - Поставь себе ник!\n 🚬/luck - Испытай настоящий рандом!\n🏏/sf @<ник> - Вызови кого-то на уличную драку! \n💸/bet @<юзернейм> <количество> - Поставь денег на своего любимчика, и может даже выиграй!\n💎/topsf, /topst - Топ самых отбитых драчунов и самых заядлых ставочников!\n\n🤔 Админские команды: \n/xhp, /wipebubl, /add_bubl, /remove_bubl \n\n💖Ждите новых Окак обновлений!\n ";bot.send_message(message.chat.id,help_text)
 def set_spok_handler(bot,message):
 	register_user(message);command_text=message.text.split('/set_spok',1)
 	if len(command_text)>1 and command_text[1].strip():
@@ -15,13 +15,31 @@ def set_spok_handler(bot,message):
 		if db.save_personal_message(message.from_user.id,_A,spok_message):bot.reply_to(message,f"✅ Ваше пожелание спокойной ночи сохранено!\n\n💬 Текст: {spok_message}\n\nТеперь используйте /spok чтобы отправить его!")
 		else:bot.reply_to(message,'❌ Произошла ошибка при сохранении сообщения.')
 	else:bot.reply_to(message,'❗ Пожалуйста, укажите текст сообщения после команды.\n\nПример: /set_spok Спокойной ночи, сладких снов! 🌙✨')
-def spok_handler(bot,message):
-	register_user(message);spok_message=db.get_personal_message(message.from_user.id,_A)
-	if spok_message:
-		if message.reply_to_message and message.reply_to_message.from_user.username:response_text=f"@{message.from_user.username}", f"говорит всем (или не всем): 🌙 {spok_message}"
-		else:response_text=f"🌙 @{message.from_user.username} ({message.from_user.first_name}) говорит всем (или не всем): {spok_message}"
-		bot.reply_to(message,response_text)
-	else:bot.reply_to(message,'❗ У вас нет сохранённого пожелания спокойной ночи!\n\nИспользуйте /set_spok [текст] чтобы сохранить своё пожелание.')
+def spok_handler(bot, message):
+    register_user(message)
+    spok_message = db.get_personal_message(message.from_user.id, _A)
+    if not spok_message:
+        bot.reply_to(
+            message,
+            "❗ У вас нет сохранённого пожелания спокойной ночи!\n\n"
+            "Используйте /set_spok [текст] чтобы сохранить своё пожелание."
+        )
+        return
+
+    sender_username = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+    sender_name = message.from_user.first_name or ""
+
+    if message.reply_to_message and message.reply_to_message.from_user:
+        # Есть ответ на сообщение → персональное пожелание
+        target = message.reply_to_message.from_user
+        target_username = f"@{target.username}" if target.username else target.first_name
+        target_name = target.first_name or ""
+        response_text = f"🌙 {sender_username} ({sender_name}) желает {target_username} ({target_name}): {spok_message}"
+    else:
+        # Нет ответа → пожелание всем
+        response_text = f"🌙 {sender_username} ({sender_name}) говорит всем (или не всем): {spok_message}"
+
+    bot.reply_to(message, response_text)
 def hello_handler(bot,message):register_user(message);bot.reply_to(message,f"Привет, {message.from_user.first_name}! 👋")
 def bye_handler(bot,message):register_user(message);bot.reply_to(message,f"Пока, {message.from_user.first_name}! 😢")
 def okak_handler(bot,message):register_user(message);bot.reply_to(message,f"@{message.from_user.username} тру окак фан 🔥")

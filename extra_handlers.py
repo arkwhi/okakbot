@@ -8,8 +8,8 @@ log = logging.getLogger(__name__)
 db = Database()
 
 # === Конфиг ===
-MIN_RANDOM = 5
-MAX_RANDOM = 150
+MIN_RANDOM = 35
+MAX_RANDOM = 350
 MIN_BET = 15
 BET_COOLDOWN = 7            # кулдаун на любые ставки
 STREET_COOLDOWN = 15        # кулдаун /bomj
@@ -22,7 +22,7 @@ PROPERTIES = {
         "price": 20000,
         "command": "mafia",
         "cooldown": 20,
-        "income": (140, 340),
+        "income": (140, 740),
         "message": "🥷Ты выполнил маленькое задание от мафии, получив зарплату {money} бублей",
     },
     "communal": {
@@ -30,7 +30,7 @@ PROPERTIES = {
         "price": 95000,
         "command": "clean",
         "cooldown": 30,
-        "income": (400, 800),
+        "income": (500, 1800),
         "message": "🫧 🧽Ты помыл пол в соседнем общежитии, и тебе скинулись {money} бублей",
     }
 }
@@ -154,7 +154,7 @@ def luck_handler(bot, message):
         cb = f"luck_{uid}_{i}_{lucky_index}"
         markup.add(types.InlineKeyboardButton(emoji, callback_data=cb))
 
-    bot.send_message(message.chat.id, "🎰 Выбери один из 5 вариантов:", reply_markup=markup)
+    bot.send_message(message.chat.id, "🎰 Под одной кнопкой есть большая деньга:", reply_markup=markup)
 
 def luck_callback_handler(bot, call):
     try:
