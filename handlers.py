@@ -6,10 +6,9 @@ def register_user(message):user=message.from_user;db.add_user(user_id=user.id,us
 def start_handler(bot,message):register_user(message);bot.send_message(message.chat.id,f"""Привет, {message.from_user.first_name}! 🤖
 
 Доступные команды:
-📝 /set_spok [сообщение] - сохранить персональное пожелание спокойной ночи
-🌙 /spok - отправить ваше пожелание спокойной ночи
 📋 /help - показать все команды""")
-def help_handler(bot,message):help_text='\n🤖 Список команд бота:\n\n🔸 /start - начать работу с ботом\n🔸 /help - показать это сообщение\n\n📝 Персональные сообщения:\n🔸 /set_spok [текст] - сохранить своё пожелание спокойной ночи\n🔸 /spok - отправить ваше сохранённое пожелание\n\n🎉 Другие команды:\n🔸 /hello - поприветствовать\n🔸 /bye - попрощаться\n🔸 напишите "окак" - получить особый ответ\n    ';bot.send_message(message.chat.id,help_text)
+def help_handler(bot,message):help_text=
+"😳Ну вот, все команды бота: \n\n 🍎/help - Показать все команды \n🪙/bomj - Бомжуй и получай деньги! \n🤵/pocket - Возьми с собой чуть-чуть денег, и попробуй своровать с карманов чужаков. \n🎰/casino - Самое жестокое испытание каждого человека \n😵‍💫/loto - До последних денег покупай билеты, ведь ты выиграешь! \n🪤/balance - Посмотри в свою шляпу, бомж \n💰/topbubl - Посмотри топ богачей. \n🪩Дать <@ник> <количество> - Подари денег кому-нибудь \n🛖🏢/buy_hut и /buy_communal - Покупай недвижку за 20к и 95к чтобы открыть новые работы. \n 🥷🧽/mafia и /clean - Работы по недвижимости \n🌚/whoami, /id, /osebe - Кто ты? Твой айди. О тебе \n🌝Окак ник <ник> - Поставь себе ник!\n\n💖Ждите новых Окак обновлений!\n ";bot.send_message(message.chat.id,help_text)
 def set_spok_handler(bot,message):
 	register_user(message);command_text=message.text.split('/set_spok',1)
 	if len(command_text)>1 and command_text[1].strip():
