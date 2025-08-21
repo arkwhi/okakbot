@@ -60,6 +60,15 @@ def _ensure_tables():
             user_id INTEGER PRIMARY KEY,
             total_won INTEGER DEFAULT 0
         )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS treasury (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        balance INTEGER NOT NULL
+    )""")
+    row = conn.execute("SELECT balance FROM treasury WHERE id=1").fetchone()
+    if not row:
+        conn.execute("INSERT INTO treasury (id, balance) VALUES (1, 100000)")
+        # — внутри _ensure_tables() —
+    
         conn.commit()
 
 _ensure_tables()
@@ -93,6 +102,30 @@ def wipebubl_handler(bot, message):
         conn.commit()
     bot.send_message(message.chat.id, "⚠️ Все балансы обнулены.")
 
+# Сокровищница 
+def _treasury_get() -> int:
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT balance FROM treasury WHERE id=1").fetchone()
+        return row[0] if row else 0
+
+def _treasury_add(amount: int) -> None:
+    if amount <= 0: 
+        return
+    with db.get_connection() as conn:
+        conn.execute("UPDATE treasury SET balance = balance + ? WHERE id=1", (amount,))
+        conn.commit()
+
+def _treasury_sub(amount: int) -> int:
+    if amount <= 0: 
+        return 0
+    with db.get_connection() as conn:
+        bal = conn.execute("SELECT balance FROM treasury WHERE id=1").fetchone()
+        cur = bal[0] if bal else 0
+        take = min(cur, amount)
+        if take > 0:
+            conn.execute("UPDATE treasury SET balance = balance - ? WHERE id=1", (take,))
+            conn.commit()
+        return take
 # === Luck-игра ===
 _last_luck = {}   # user_id -> ts
 
@@ -253,6 +286,8 @@ def bet_game_handler(bot, message, chance, mult, win_texts, lose_texts):
         _update_balance(uid, win)
         text = random.choice(win_texts).format(bet=bet, win=win)
     else:
+        # игрок проиграл — 50% ставки уходит в сокровищницу
+        _treasury_add(int(bet * 0.5))
         text = random.choice(lose_texts).format(bet=bet)
 
     bot.reply_to(message, f"{text}\n💰 Баланс: {_get_balance(uid)}")
@@ -803,6 +838,134 @@ def topst_handler(bot, message, limit=10):
         log.error(f"topst err: {e}")
         bot.reply_to(message, "❌ Ошибка при получении топа")
 
+
+#===Сокровищница===
+
+# Кулдауны для сокровищницы: (user_id, action) -> ts
+_tre_cd = {}
+TRE_ACTION_COOLDOWN = 30 * 60  # 30 минут
+
+def _tre_cooldown_left(user_id: int, action: str) -> int:
+    now = time.time()
+    last = _tre_cd.get((user_id, action), 0)
+    left = int(TRE_ACTION_COOLDOWN - (now - last))
+    return left if left > 0 else 0
+
+def _tre_touch_cd(user_id: int, action: str):
+    _tre_cd[(user_id, action)] = time.time()
+
+def _tre_markup(origin_uid: int) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup()
+    kb.row(
+        types.InlineKeyboardButton("🦹 Ограбить", callback_data=f"tre_rob_{origin_uid}"),
+        types.InlineKeyboardButton("📥 Положить", callback_data=f"tre_put_{origin_uid}")
+    )
+    kb.row(
+        types.InlineKeyboardButton("🤲 Попросить", callback_data=f"tre_ask_{origin_uid}"),
+        types.InlineKeyboardButton("❌ Закрыть", callback_data=f"tre_close_{origin_uid}")
+    )
+    return kb
+
+def tre_show_handler(bot, message):
+    register_user(message)
+    bal = _treasury_get()
+    text = f"🏛 Сокровищница\nБаланс: {bal} бублей"
+    bot.send_message(message.chat.id, text, reply_markup=_tre_markup(message.from_user.id))
+
+def tre_callback_handler(bot, call):
+    try:
+        data = (call.data or "")
+        if not data.startswith("tre_"):
+            return
+        parts = data.split("_")
+        # форматы: tre_rob_<origin_uid>, tre_put_<origin_uid>, tre_ask_<origin_uid>, tre_close_<origin_uid>
+        if len(parts) != 3:
+            return
+        action, origin_uid_s = parts[1], parts[2]
+        origin_uid = int(origin_uid_s)
+        uid = call.from_user.id
+
+        # Ограничение на закрытие: только инициатор может закрыть
+        if action == "close":
+            if uid != origin_uid and uid != OWNER_ID:
+                bot.answer_callback_query(call.id, "❌ Это меню не ты открывал", show_alert=True)
+                return
+            try:
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            except Exception:
+                pass
+            return
+
+        # Кулдаун для каждого действия отдельно
+        left = _tre_cooldown_left(uid, action)
+        if left > 0:
+            bot.answer_callback_query(call.id, f"⏳ Подожди {left//60} мин {left%60} сек", show_alert=True)
+            return
+
+        # Действия
+        if action == "rob":
+            # 20% успех; при успехе ворует 5–15% казны
+            success = random.random() < 0.20
+            if success:
+                tre_bal = _treasury_get()
+                if tre_bal <= 0:
+                    bot.answer_callback_query(call.id, "🏛 Пусто — нечего воровать", show_alert=True)
+                    return
+                percent = random.randint(5, 15) / 100.0
+                steal = max(1, int(tre_bal * percent))
+                got = _treasury_sub(steal)
+                if got > 0:
+                    _update_balance(uid, got)
+                    bot.answer_callback_query(call.id, f"🦹 Успех! Украдено {got} бублей", show_alert=True)
+                else:
+                    bot.answer_callback_query(call.id, "🏛 Не удалось — казна изменилась", show_alert=True)
+            else:
+                bot.answer_callback_query(call.id, "🚨 Поймали! Ничего не удалось забрать", show_alert=True)
+            _tre_touch_cd(uid, "rob")
+
+        elif action == "put":
+            # Положить 1% от баланса игрока
+            bal = _get_balance(uid)
+            amount = int(bal * 0.01)
+            if amount <= 0:
+                bot.answer_callback_query(call.id, "💸 Слишком мало для вклада", show_alert=True)
+                return
+            _update_balance(uid, -amount)
+            _treasury_add(amount)
+            bot.answer_callback_query(call.id, f"📥 Внесено {amount} бублей", show_alert=True)
+            _tre_touch_cd(uid, "put")
+
+        elif action == "ask":
+            # Попросить 0.1% от казны
+            tre_bal = _treasury_get()
+            amount = int(tre_bal * 0.001)  # 0.1%
+            if amount <= 0:
+                bot.answer_callback_query(call.id, "🏛 Недостаточно средств в сокровищнице", show_alert=True)
+                return
+            taken = _treasury_sub(amount)
+            if taken > 0:
+                _update_balance(uid, taken)
+                bot.answer_callback_query(call.id, f"🤲 Получено {taken} бублей", show_alert=True)
+            else:
+                bot.answer_callback_query(call.id, "🏛 Недостаточно средств в сокровищнице", show_alert=True)
+            _tre_touch_cd(uid, "ask")
+
+        # Обновляем текст баланса под сообщением
+        try:
+            new_bal = _treasury_get()
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=f"🏛 Сокровищница\nБаланс: {new_bal} бублей",
+                reply_markup=_tre_markup(origin_uid)
+            )
+        except Exception:
+            # если сообщение уже удалили/нельзя редактировать — игнор
+            pass
+
+    except Exception as e:
+        log.error(f"tre_callback_handler error: {e}")
+        bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
 # === Регистрация всех хэндлеров ===
 def register_extra_handlers(bot):
 
@@ -934,3 +1097,9 @@ def register_extra_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("luck_"))
     def _h_luck_cb(call): luck_callback_handler(bot, call)
 
+    # Сокровищница
+    @bot.message_handler(commands=['tre'])
+    def _h_tre(m): tre_show_handler(bot, m)
+
+    @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("tre_"))
+    def _h_tre_cb(call): tre_callback_handler(bot, call)
