@@ -974,9 +974,9 @@ def _ensure_balances_table():
     try:
         with db.get_connection() as conn:
             conn.execute("""
-                '''CREATE TABLE IF NOT EXISTS balances (
-                    user_id INTEGER PRIMARY KEY,
-                    balance INTEGER DEFAULT 0
+                '''#CREATE TABLE IF NOT EXISTS balances (
+                    #user_id INTEGER PRIMARY KEY,
+                    #balance INTEGER DEFAULT 0
                 )'''
             """)
             conn.commit()
