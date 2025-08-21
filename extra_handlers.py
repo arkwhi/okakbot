@@ -375,8 +375,8 @@ _player_duel_cooldown = {}      # user_id -> last_end_ts
 
 CHAT_COOLDOWN = 60
 PLAYER_COOLDOWN = 120
-INVITE_TIMEOUT = 25
-BETTING_PERIOD = 30
+INVITE_TIMEOUT = 35
+BETTING_PERIOD = 45
 
 WEAK_HIT_TEXTS = [
     "{attacker} наносит слабый удар — {dmg} урона!",
@@ -640,10 +640,10 @@ def _run_duel(bot, duel):
             bot.send_message(chat_id, text.format(attacker=_display_name(attacker), dmg=dmg) +
                              f"\n🩺 {_display_name(attacker)}: {hp[attacker]} HP | {_display_name(defender)}: {hp[defender]} HP")
 
-            time.sleep(1.5)
+            time.sleep(2.5)
             attacker, defender = defender, attacker
 
-            if round_no > 200:
+            if round_no > 55:
                 bot.send_message(chat_id, "⚠️ Дуэль заняла слишком много ходов — ничья. Возврат ставок.")
                 for b, info in duel['bets'].items():
                     _update_balance(b, info['amount'])
