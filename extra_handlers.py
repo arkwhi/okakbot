@@ -945,8 +945,7 @@ def _ensure_balances_table():
                 '''#CREATE TABLE IF NOT EXISTS balances (
                     #user_id INTEGER PRIMARY KEY,
                     #balance INTEGER DEFAULT 0
-                #)'''
-           ''' """) '''
+                #)
           #'''  conn.commit()
    ''' except Exception as e:
         log.error(f"Не удалось создать таблицу balances: {e}")
