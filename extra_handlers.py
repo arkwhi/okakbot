@@ -2,6 +2,7 @@
 import random, re, logging, time, threading, math
 from database import Database
 from handlers import register_user
+from telebot import types
 
 log = logging.getLogger(__name__)
 db = Database()
@@ -21,7 +22,7 @@ PROPERTIES = {
         "price": 20000,
         "command": "mafia",
         "cooldown": 20,
-        "income": (100, 300),
+        "income": (140, 340),
         "message": "🥷Ты выполнил маленькое задание от мафии, получив зарплату {money} бублей",
     },
     "communal": {
@@ -80,6 +81,85 @@ def _update_balance(user_id: int, delta: int):
         conn.execute("UPDATE balances SET balance=0 WHERE user_id=? AND balance<0", (user_id,))
         conn.commit()
 
+#===Вайп и удача===
+
+# === Wipe всех балансов (только владелец) ===
+def wipebubl_handler(bot, message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Нет доступа")
+        return
+    with db.get_connection() as conn:
+        conn.execute("UPDATE balances SET balance=0")
+        conn.commit()
+    bot.send_message(message.chat.id, "⚠️ Все балансы обнулены.")
+
+# === Luck-игра ===
+_last_luck = {}   # user_id -> ts
+
+EMOJIS = [
+    "😀","😎","🤡","👻","💀","🐵","🐸","🐱","🦊","🐼",
+    "🐨","🐯","🦁","🐮","🐷","🐔","🐧","🐦","🐤","🐣",
+    "🐥","🦆","🦅","🦉","🐺"
+]
+
+def luck_handler(bot, message):
+    register_user(message)
+    uid = message.from_user.id
+    now = time.time()
+    last = _last_luck.get(uid, 0)
+    if now - last < 10:
+        bot.reply_to(message, f"⏳ Подожди {int(10 - (now - last))} сек перед следующей попыткой")
+        return
+    _last_luck[uid] = now
+
+    # Выбираем 5 случайных эмодзи
+    chosen = random.sample(EMOJIS, 5)
+    lucky_index = random.randint(0, 4)
+
+    markup = types.InlineKeyboardMarkup()
+    for i, emoji in enumerate(chosen):
+        cb = f"luck_{uid}_{i}_{lucky_index}"
+        markup.add(types.InlineKeyboardButton(emoji, callback_data=cb))
+
+    bot.send_message(message.chat.id, "🎰 Выбери один из 5 вариантов:", reply_markup=markup)
+
+def luck_callback_handler(bot, call):
+    try:
+        parts = call.data.split("_")
+        if len(parts) != 4 or parts[0] != "luck":
+            return
+        uid = int(parts[1])
+        if call.from_user.id != uid:
+            bot.answer_callback_query(call.id, "❌ Не твоя игра")
+            return
+
+        chosen = int(parts[2])
+        lucky_index = int(parts[3])
+
+        bal = _get_balance(uid)
+        if bal <= 0:
+            bot.answer_callback_query(call.id, "❌ У тебя нет бублей", show_alert=True)
+            return
+
+        if chosen == lucky_index:
+            gain = bal * 5
+            _update_balance(uid, gain)
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=f"🎉 Удача! Баланс умножен в 5 раз.\n💰 Теперь у тебя {_get_balance(uid)} бублей."
+            )
+        else:
+            loss = bal // 2
+            _update_balance(uid, -loss)
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=f"💀 Не повезло. Минус {loss} бублей.\n💰 Остаток: {_get_balance(uid)}"
+            )
+    except Exception as e:
+        log.error(f"luck_callback_handler error: {e}")
+        bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
 # === Недвижимость ===
 def _buy_property_record(user_id, key):
     with db.get_connection() as conn:
@@ -139,7 +219,7 @@ def street_handler(bot, message):
     _last_street[uid] = now
     amount = random.randint(MIN_RANDOM, MAX_RANDOM)
     _update_balance(uid, amount)
-    bot.reply_to(message, f"🪙 Ты выпросил {amount} бублей на улице!\n💰 Баланс: {_get_balance(uid)}")
+    bot.reply_to(message, f"🪙 Ты выпросил {amount} бублей на улице! (как последний бомж...)\n💰 Баланс: {_get_balance(uid)}")
 
 # === Игры ===
 def bet_game_handler(bot, message, chance, mult, win_texts, lose_texts):
@@ -360,7 +440,7 @@ def remove_bubl_handler(bot, message):
 # === Сообщение от лица бота (только владелец) ===
 def xhp_handler(bot, message):
     if message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Нет доступа")
+        bot.reply_to(message, "❌ Ты за кого себя пытаешься выдать, малой?")
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
@@ -842,4 +922,15 @@ def register_extra_handlers(bot):
 
     @bot.message_handler(commands=['bet'])
     def _h_bet(m): bet_handler(bot, m)
+    
+    # Обнуление балансов
+    @bot.message_handler(commands=['wipebubl'])
+    def _h_wipebubl(m): wipebubl_handler(bot, m)
+
+    # Luck-игра
+    @bot.message_handler(commands=['luck'])
+    def _h_luck(m): luck_handler(bot, m)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("luck_"))
+    def _h_luck_cb(call): luck_callback_handler(bot, call)
 
