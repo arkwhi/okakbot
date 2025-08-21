@@ -198,11 +198,6 @@ def nickname_handler(bot, message):
     _set_nickname(message.from_user.id, nick)
     bot.reply_to(message, f"✅ Теперь твой ник: {nick}")
 
-'''def nickname_handler(bot, message):
-    m = re.match(r"(?i)^окак\s+ник\s+(.+)$", message.text.strip())
-    if not m: return
-    _set_nickname(message.from_user.id, m.group(1).strip())
-    bot.reply_to(message, f"✅ Теперь твой ник: {m.group(1).strip()}")" '''
 
 # === Топ ===
 def topbubl_handler(bot, message):
@@ -258,33 +253,6 @@ def transfer_handler(bot, message):
     _update_balance(sender_id, -amount)
     _update_balance(target_id, amount)
     bot.reply_to(message, f"✅ {amount} бублей → {target_raw}")
-'''def transfer_handler(bot, message):
-    m = re.match(r"(?i)^дать\s+(@?[A-Za-z0-9_]{1,32}|\d+)\s+(\d+)$", message.text.strip())
-    if not m:
-        bot.reply_to(message, "❗ Используй: дать @user 100")
-        return
-    target_raw, amount_str = m.groups()
-    amount=int(amount_str)
-    if amount<=0: return
-    sender=message.from_user.id
-    bal=_get_balance(sender)
-    if bal<amount:
-        bot.reply_to(message,"❌ Недостаточно средств")
-        return
-    if target_raw.isdigit():
-        target_id=int(target_raw)
-    else:
-        row=db.get_connection().execute("SELECT user_id FROM users WHERE username=?",(target_raw.lstrip("@"),)).fetchone()
-        target_id=row[0] if row else None
-    if not target_id:
-        bot.reply_to(message,"❌ Пользователь не найден (/start)")
-        return
-    if target_id==sender:
-        bot.reply_to(message,"❌ Самому себе нельзя")
-        return
-    _update_balance(sender,-amount)
-    _update_balance(target_id,amount)
-    bot.reply_to(message,f"✅ {amount} бублей → {target_raw}")'''
 
 # === Админ ===
 def admin_add_remove(bot,message,mode):
