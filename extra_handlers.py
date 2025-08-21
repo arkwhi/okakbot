@@ -947,8 +947,8 @@ def _ensure_balances_table():
                     #balance INTEGER DEFAULT 0
                 #)'''
            ''' """) '''
-          '''  conn.commit()
-    except Exception as e:
+          #'''  conn.commit()
+   ''' except Exception as e:
         log.error(f"Не удалось создать таблицу balances: {e}")
 
 def _get_balance(user_id: int) -> int:
