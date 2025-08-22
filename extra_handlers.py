@@ -187,7 +187,27 @@ def _treasury_sub(amount: int) -> int:
             conn.execute("UPDATE treasury SET balance = balance - ? WHERE id=1", (take,))
             conn.commit()
         return take
-
+# === Сокровищница (главный вход по /tre) ===
+def tre_show_handler(bot, message):
+    """
+    Показывает баланс сокровищницы и кнопки для взаимодействия
+    """
+    try:
+        register_user(message)
+        bal = _get_treasure_balance()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("🦹 Ограбить", callback_data="tre_rob"),
+            types.InlineKeyboardButton("📥 Положить", callback_data="tre_put"),
+        )
+        markup.add(
+            types.InlineKeyboardButton("🙏 Попросить", callback_data="tre_ask"),
+            types.InlineKeyboardButton("❌ Закрыть", callback_data="tre_close"),
+        )
+        bot.reply_to(message, f"💎 Баланс сокровищницы: {bal} бублей", reply_markup=markup)
+    except Exception as e:
+        log.error(f"/tre: {e}")
+        bot.reply_to(message, "❌ Ошибка при открытии сокровищницы")
 # === Кулдауны (в памяти) ===
 _last_bet = {}     # user_id -> ts
 _last_income = {}  # (user_id, property_key) -> ts
@@ -737,7 +757,7 @@ def luck_callback_handler(bot, call):
         except: pass
 
 # === /chests ===
-CHEST_COOLDOWN = 180
+CHEST_COOLDOWN = 60
 SQUARES = ["🟥", "🟦", "🟩", "🟨", "🟪", "⬜️", "🟫", "⬛️"]
 
 def chests_handler(bot, message):
