@@ -165,6 +165,12 @@ def _update_balance(user_id: int, delta: int):
             (user_id, delta)
         )
         conn.commit()
+# === Базовый хендлер для /balance ===
+def balance_handler(bot, message):
+    register_user(message)
+    user_id = message.from_user.id
+    balance = _get_balance(user_id)
+    bot.reply_to(message, f"💰 Твой баланс: {balance} бублей")
 
 # === Nicknames / display name ===
 def _set_nickname(user_id, nick):
