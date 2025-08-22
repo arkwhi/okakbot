@@ -194,7 +194,7 @@ def tre_show_handler(bot, message):
     """
     try:
         register_user(message)
-        bal = _get_treasure_balance()
+        bal = _get_treasury_balance()
         markup = types.InlineKeyboardMarkup()
         markup.add(
             types.InlineKeyboardButton("🦹 Ограбить", callback_data="tre_rob"),
