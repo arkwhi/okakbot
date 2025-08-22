@@ -145,6 +145,49 @@ def _treasury_add(amount: int) -> None:
         
 _ensure_tables()
 _ensure_treasure_table()
+
+# ----------------- БЛОК A: миграции -----------------
+# Вставить после db = Database() и после вызова _ensure_tables()
+
+# 1) Убедимся, что в таблице users есть колонка last_seen_chat (если БД — старая).
+def _ensure_users_last_seen_column():
+    try:
+        with db.get_connection() as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if 'last_seen_chat' not in cols:
+                try:
+                    conn.execute("ALTER TABLE users ADD COLUMN last_seen_chat INTEGER")
+                    conn.commit()
+                    log.info("Добавлен столбец users.last_seen_chat")
+                except Exception as e:
+                    # если ALTER не поддерживается или другая причина — логируем
+                    log.warning(f"Не удалось добавить last_seen_chat: {e}")
+    except Exception as e:
+        log.error(f"_ensure_users_last_seen_column error: {e}")
+
+# 2) Таблица рабства (slaves)
+def _ensure_slaves_table():
+    try:
+        with db.get_connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS slaves (
+                    slave_id INTEGER PRIMARY KEY,
+                    owner_id INTEGER NOT NULL,
+                    enslaved_at INTEGER NOT NULL,
+                    last_tax_ts INTEGER NOT NULL
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        log.error(f"_ensure_slaves_table error: {e}")
+
+# Вызываем миграции/создание таблиц один раз при старте
+try:
+    _ensure_users_last_seen_column()
+    _ensure_slaves_table()
+except Exception as e:
+    log.error(f"Ошибка при инициализации миграций: {e}")
+# ----------------- конец блока A -----------------
 # === Баланс / accounts ===
 def _get_balance(user_id: int) -> int:
     with db.get_connection() as conn:
@@ -228,6 +271,83 @@ def _get_properties(user_id):
         rows = conn.execute("SELECT property_key FROM properties WHERE user_id=?", (user_id,)).fetchall()
         return [r[0] for r in rows]
 
+# ----------------- БЛОК B: утилиты для рабства -----------------
+import math
+
+def _is_slave(user_id: int):
+    """Возвращает owner_id если пользователь раб, иначе None"""
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT owner_id FROM slaves WHERE slave_id=?", (user_id,)).fetchone()
+        return row[0] if row else None
+
+def _is_owner(user_id: int) -> bool:
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT 1 FROM slaves WHERE owner_id=? LIMIT 1", (user_id,)).fetchone()
+        return bool(row)
+
+def _enslave(owner_id: int, slave_id: int):
+    now = int(time.time())
+    with db.get_connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO slaves (slave_id, owner_id, enslaved_at, last_tax_ts) VALUES (?,?,?,?)",
+                     (slave_id, owner_id, now, now))
+        conn.commit()
+
+def _release_slave(slave_id: int):
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM slaves WHERE slave_id=?", (slave_id,))
+        conn.commit()
+
+def _get_slaves_of(owner_id: int):
+    with db.get_connection() as conn:
+        rows = conn.execute("SELECT slave_id, enslaved_at, last_tax_ts FROM slaves WHERE owner_id=?", (owner_id,)).fetchall()
+        return rows
+
+def _get_owner_slaves_count(owner_id: int) -> int:
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT COUNT(*) FROM slaves WHERE owner_id=?", (owner_id,)).fetchone()
+        return row[0] if row else 0
+
+def _apply_hourly_tax_for_slave(slave_id: int):
+    """
+    Применяет начисление налогов для одного раба.
+    Вычисляет сколько целых часов прошло с last_tax_ts, и на каждый час снимает 30% от текущего баланса раба
+    и переводит владельцу. Обновляет last_tax_ts.
+    Возвращает total_transferred.
+    """
+    with db.get_connection() as conn:
+        r = conn.execute("SELECT owner_id, last_tax_ts FROM slaves WHERE slave_id=?", (slave_id,)).fetchone()
+        if not r:
+            return 0
+        owner_id, last_ts = r
+    now = int(time.time())
+    hours = (now - last_ts) // 3600
+    if hours <= 0:
+        return 0
+    total_transferred = 0
+    for _ in range(int(hours)):
+        bal = _get_balance(slave_id)
+        if bal == 0:
+            break
+        tax = int(math.floor(abs(bal) * 0.30))
+        if tax <= 0:
+            break
+        _update_balance(slave_id, -tax)
+        _update_balance(owner_id, tax)
+        total_transferred += tax
+    # обновим last_tax_ts на now
+    with db.get_connection() as conn:
+        conn.execute("UPDATE slaves SET last_tax_ts=? WHERE slave_id=?", (now, slave_id))
+        conn.commit()
+    return total_transferred
+
+def _apply_hourly_tax_for_owner(owner_id: int):
+    """Применяет налог для всех рабов владельца. Возвращает суммарную сумму."""
+    total = 0
+    rows = _get_slaves_of(owner_id)
+    for slave_id, _, _ in rows:
+        total += _apply_hourly_tax_for_slave(slave_id)
+    return total
+# ----------------- конец блока B -----------------
 # ======= Начало блока: сокровищница (handlers) =======
 # Зависимости: register_user(message), _get_balance(uid), _update_balance(uid, delta), _display_name(uid)
 # Убедись, что импортирован: from telebot import types
@@ -1302,6 +1422,162 @@ def wipebubl_handler(bot, message):
         conn.commit()
     bot.send_message(message.chat.id, "⚠️ Все балансы обнулены.")
 
+# ----------------- БЛОК C: хендлеры рабства -----------------
+# Кулдауны (в памяти)
+_last_ensl = {}    # user_id -> ts (когда пользователь последний раз пытался поработить)
+_last_escape = {}  # slave_id -> ts (последняя попытка побега)
+
+ENSL_COOLDOWN = 3 * 3600  # 3 часа
+ESCAPE_COOLDOWN = 3600    # 1 час
+ENS_SUCCESS_BASE = 0.5    # базовый шанс 50%
+ESCAPE_SUCCESS = 0.35     # шанс удачи при побеге
+
+def ensl_handler(bot, message):
+    """
+    /ensl @user  — попытка поработить другого игрока (развлекательная).
+    Кулдаун — 3 часа у того, кто вызывает.
+    Нельзя поработить того, кто уже раб; нельзя поработить человека, который уже является рабовладельцем (имеет собственных рабов).
+    Шанс = 50% - 10% * количество собственности цели (hut/communal/country).
+    """
+    register_user(message)
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /ensl @user")
+        return
+    target_raw = parts[1]
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        with db.get_connection() as conn:
+            r = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
+            target_id = r[0] if r else None
+    if not target_id:
+        bot.reply_to(message, "❌ Пользователь не найден. Попроси его написать боту /start")
+        return
+    owner = message.from_user.id
+    if owner == target_id:
+        bot.reply_to(message, "❌ Нельзя поработить себя.")
+        return
+    # кулдаун
+    now = time.time()
+    last = _last_ensl.get(owner, 0)
+    if now - last < ENSL_COOLDOWN:
+        bot.reply_to(message, f"⏳ Подожди {int((ENSL_COOLDOWN - (now-last))/60)} минут перед новой попыткой.")
+        return
+    # цель — не уже раб
+    if _is_slave(target_id):
+        bot.reply_to(message, "❌ Цель уже является чьим-то рабом.")
+        _last_ensl[owner] = now
+        return
+    # цель — не рабовладелец
+    if _is_owner(target_id):
+        bot.reply_to(message, "❌ Нельзя поработить другого рабовладельца.")
+        _last_ensl[owner] = now
+        return
+
+    # вычисляем шанс: 50% - 10% за каждую недвижимость цели
+    props = _get_properties(target_id)
+    chance = ENS_SUCCESS_BASE - 0.10 * len(props)
+    if chance < 0.05:
+        chance = 0.05  # нижний предел 5%
+    roll = random.random()
+    if roll < chance:
+        _enslave(owner, target_id)
+        bot.reply_to(message, f"✅ {_display_name(owner)} успешно поработил {_display_name(target_id)}! Теперь {_display_name(target_id)} — твой раб.")
+    else:
+        bot.reply_to(message, f"❌ Попытка поработить {_display_name(target_id)} не удалась.")
+    _last_ensl[owner] = now
+
+def sl_handler(bot, message):
+    """/sl — показать своих рабов. Также при запросе — собираем налоги с рабов (если они накопились)."""
+    register_user(message)
+    owner = message.from_user.id
+    if not _is_owner(owner):
+        bot.reply_to(message, "❗ У тебя нет рабов.")
+        return
+    # сначала применим налоги, если есть (по требованию)
+    total = _apply_hourly_tax_for_owner(owner)
+    rows = _get_slaves_of(owner)
+    lines = []
+    for slave_id, enslaved_at, last_tax_ts in rows:
+        lines.append(f"- {_display_name(slave_id)} (с {time.strftime('%Y-%m-%d %H:%M', time.localtime(enslaved_at))})")
+    txt = f"👑 Твои рабы:\n" + "\n".join(lines)
+    if total > 0:
+        txt = f"💰 Собрано с рабов за время: {total} бублей\n\n" + txt
+    bot.reply_to(message, txt)
+
+def desl_handler(bot, message):
+    """/desl @user — освободить своего раба (только владелец)."""
+    register_user(message)
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /desl @user")
+        return
+    target_raw = parts[1]
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        with db.get_connection() as conn:
+            r = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
+            target_id = r[0] if r else None
+    if not target_id:
+        bot.reply_to(message, "❌ Пользователь не найден.")
+        return
+    owner = message.from_user.id
+    cur_owner = _is_slave(target_id)
+    if cur_owner != owner:
+        bot.reply_to(message, "❌ Этот пользователь не является твоим рабом.")
+        return
+    _release_slave(target_id)
+    bot.reply_to(message, f"✅ {_display_name(target_id)} освобождён(а).")
+
+def escape_handler(bot, message):
+    """/escape — раб пытается сбежать (кулдаун 1 час)."""
+    register_user(message)
+    user = message.from_user.id
+    owner = _is_slave(user)
+    if not owner:
+        bot.reply_to(message, "❗ Ты не раб.")
+        return
+    now = time.time()
+    last = _last_escape.get(user, 0)
+    if now - last < ESCAPE_COOLDOWN:
+        bot.reply_to(message, f"⏳ Подожди {int((ESCAPE_COOLDOWN - (now-last))/60)} минут перед новой попыткой.")
+        return
+    if random.random() < ESCAPE_SUCCESS:
+        _release_slave(user)
+        bot.reply_to(message, f"🏃‍♂️ Ура! {_display_name(user)} сумел(а) сбежать и стал(а) свободен(на).")
+    else:
+        bot.reply_to(message, f"🚫 Попытка побега не удалась. Остаёшься рабом.")
+    _last_escape[user] = now
+
+def topsl_handler(bot, message):
+    """/topsl — топ рабовладельцев по количеству рабов."""
+    with db.get_connection() as conn:
+        rows = conn.execute("SELECT owner_id, COUNT(*) as cnt FROM slaves GROUP BY owner_id ORDER BY cnt DESC LIMIT 10").fetchall()
+    if not rows:
+        bot.reply_to(message, "❗ Пока нет рабовладельцев.")
+        return
+    lines = []
+    for i, (owner_id, cnt) in enumerate(rows, 1):
+        lines.append(f"{i}. {_display_name(owner_id)} — {cnt} раб(ов)")
+    bot.send_message(message.chat.id, "🏆 Топ рабовладельцев:\n" + "\n".join(lines))
+
+def collect_handler(bot, message):
+    """
+    /collect — владелец собирает налоги со своих рабов (переносит все накопленные за прошедшие часы).
+    """
+    register_user(message)
+    owner = message.from_user.id
+    if not _is_owner(owner):
+        bot.reply_to(message, "❗ У тебя нет рабов.")
+        return
+    total = _apply_hourly_tax_for_owner(owner)
+    if total > 0:
+        bot.reply_to(message, f"💰 Собрано {total} бублей с твоих рабов. Баланс: {_get_balance(owner)}")
+    else:
+        bot.reply_to(message, "ℹ️ Ничего нового для сбора (пока не прошёл полный час).")
+# ----------------- конец блока C -----------------
 # === Регистрация хэндлеров ===
 def register_extra_handlers(bot):
 
@@ -1470,4 +1746,22 @@ def register_extra_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("chests_"))
     def _h_chests_cb(call): chests_callback_handler(bot, call)
 
+# рабство
+    @bot.message_handler(commands=['ensl'])
+    def _h_ensl(m): ensl_handler(bot, m)
+
+    @bot.message_handler(commands=['sl'])
+    def _h_sl(m): sl_handler(bot, m)
+
+    @bot.message_handler(commands=['desl'])
+    def _h_desl(m): desl_handler(bot, m)
+
+    @bot.message_handler(commands=['escape'])
+    def _h_escape(m): escape_handler(bot, m)
+
+    @bot.message_handler(commands=['topsl'])
+    def _h_topsl(m): topsl_handler(bot, m)
+
+    @bot.message_handler(commands=['collect'])
+    def _h_collect(m): collect_handler(bot, m)
 # === Конец файла ===
