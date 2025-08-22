@@ -3,6 +3,7 @@ import random, re, logging, time, threading, math
 from database import Database
 from handlers import register_user
 from telebot import types
+import threading
 
 log = logging.getLogger(__name__)
 db = Database()
@@ -255,6 +256,80 @@ def street_handler(bot, message):
     bot.reply_to(message, f"🪙 Ты выпросил {amount} бублей на улице! (как последний бомж...)\n💰 Баланс: {_get_balance(uid)}")
 
 # === Игры ===
+
+def bubl_handler(bot, message):
+    parts = message.text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        bot.reply_to(message, "❗ Используй так: /bubl 100")
+        return
+
+    bet = int(parts[1])
+    if bet <= 0:
+        bot.reply_to(message, "❗ Ставка должна быть положительной")
+        return
+
+    # Определяем ник или имя
+    nick = db.get_user_nick(message.from_user.id) if hasattr(db, "get_user_nick") else None
+    if not nick:
+        nick = message.from_user.first_name or (message.from_user.username or "Игрок")
+    nick_first = nick.split()[0]
+
+    text = f"🤑 {nick_first}, ты с собой берёшь {bet} бублей.\n\nКак ты хочешь разбогатеть?"
+
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("🤵 Кража", callback_data=f"bubl_pocket_{bet}_{message.from_user.id}"),
+        types.InlineKeyboardButton("🎰 Казино", callback_data=f"bubl_casino_{bet}_{message.from_user.id}"),
+        types.InlineKeyboardButton("🎟️ Лотерея", callback_data=f"bubl_loto_{bet}_{message.from_user.id}")
+    )
+
+    sent = bot.send_message(message.chat.id, text, reply_markup=markup)
+
+    # Автоудаление через 20 сек, если никто не нажал
+    def delete_msg():
+        try:
+            bot.delete_message(sent.chat.id, sent.message_id)
+        except:
+            pass
+
+    threading.Timer(20.0, delete_msg).start()
+   
+def bubl_callback_handler(bot, call):
+    try:
+        data = call.data.split("_")
+        if len(data) != 4 or data[0] != "bubl":
+            return
+        game, bet, uid = data[1], int(data[2]), int(data[3])
+
+        # Проверяем, что кнопки жмёт именно тот, кто вызывал
+        if call.from_user.id != uid:
+            bot.answer_callback_query(call.id, "❌ Это не твоя ставка!", show_alert=True)
+            return
+
+        # Удаляем кнопки
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except:
+            pass
+
+        # Запускаем соответствующую игру
+        fake_message = call.message
+        fake_message.text = f"/{game} {bet}"
+        fake_message.from_user = call.from_user
+        if game == "pocket":
+            _h_football(fake_message)
+        elif game == "casino":
+            _h_casino(fake_message)
+        elif game == "loto":
+            _h_lottery(fake_message)
+
+        bot.answer_callback_query(call.id)
+
+    except Exception as e:
+        log.error(f"bubl_callback_handler: {e}")
+        bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
+
+
 def bet_game_handler(bot, message, chance, mult, win_texts, lose_texts):
     register_user(message)
     uid = message.from_user.id
@@ -966,6 +1041,72 @@ def tre_callback_handler(bot, call):
     except Exception as e:
         log.error(f"tre_callback_handler error: {e}")
         bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
+        
+            
+# === /chests ===
+_last_chests = {}  # user_id -> ts
+CHEST_COOLDOWN = 180   # 3 минуты
+
+SQUARES = ["🟥", "🟦", "🟩", "🟨", "🟪", "⬜️", "🟫", "⬛️"]
+
+def chests_handler(bot, message):
+    register_user(message)
+    uid = message.from_user.id
+    now = time.time()
+    last = _last_chests.get(uid, 0)
+    if now - last < CHEST_COOLDOWN:
+        bot.reply_to(
+            message,
+            f"⏳ Подожди {int(CHEST_COOLDOWN - (now - last))} сек, чтобы открыть сундуки снова!"
+        )
+        return
+    _last_chests[uid] = now
+
+    chosen = random.sample(SQUARES, 3)
+    markup = types.InlineKeyboardMarkup()
+    for i, sq in enumerate(chosen):
+        cb = f"chests_{uid}_{i}"
+        markup.add(types.InlineKeyboardButton(sq, callback_data=cb))
+
+    bot.send_message(message.chat.id, "🗝️ Ты отчаянно отправился в пещеру за сундуками из легенды. Легенда права! Выбирай сундук:", reply_markup=markup)    
+def chests_callback_handler(bot, call):
+    try:
+        data = call.data.split("_")
+        if len(data) != 3 or data[0] != "chests":
+            return
+        uid = int(data[1])
+        if call.from_user.id != uid:
+            bot.answer_callback_query(call.id, "❌ Это не твои сундуки", show_alert=True)
+            return
+
+        # убираем кнопки
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except:
+            pass
+
+        # генерим результат
+        roll = random.random()
+        if roll < 0.4:
+            # выигрыш
+            amount = random.randint(2000, 6000)
+            _update_balance(uid, amount)
+            bot.send_message(call.message.chat.id, f"🎉 Сундук, который ты открыл, оказался щедрым! Ты нашёл +{amount} бублей.\n💰 Баланс: {_get_balance(uid)}")
+        elif roll < 0.7:
+            # проигрыш (баланс может уйти в минус)
+            amount = random.randint(1000, 4000)
+            _update_balance(uid, -amount)
+            bot.send_message(call.message.chat.id, f"💀 Сундук владеет чёрной магией. Забирать твои деньги не было в его планах, но ты его заставил. Минус {amount} бублей.\n💰 Баланс: {_get_balance(uid)}")
+        else:
+            # ничего
+            bot.send_message(call.message.chat.id, "📦 Сундук пуст... Может, он просто спит.")
+
+        bot.answer_callback_query(call.id)
+
+    except Exception as e:
+        log.error(f"chests_callback_handler: {e}")
+        bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
+        
 # === Регистрация всех хэндлеров ===
 def register_extra_handlers(bot):
 
@@ -987,6 +1128,14 @@ def register_extra_handlers(bot):
     # Просьба денег на улице (/bomj)
     @bot.message_handler(commands=['bomj'])
     def _h_bomj(m): street_handler(bot, m)
+    
+    # /bubl
+    @bot.message_handler(commands=['bubl'])
+    def _h_bubl(m): bubl_handler(bot, m)
+
+    # callback для bubl
+    @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("bubl_"))
+    def _h_bubl_cb(call): bubl_callback_handler(bot, call)
 
     # Игры (оставлены твои сообщения выигрыша/проигрыша)
     @bot.message_handler(commands=['pocket'])
@@ -1103,3 +1252,10 @@ def register_extra_handlers(bot):
 
     @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("tre_"))
     def _h_tre_cb(call): tre_callback_handler(bot, call)
+    
+    # /chests
+    @bot.message_handler(commands=['chests'])
+    def _h_chests(m): chests_handler(bot, m)
+
+    @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("chests_"))
+    def _h_chests_cb(call): chests_callback_handler(bot, call)
