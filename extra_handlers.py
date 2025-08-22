@@ -1335,7 +1335,7 @@ def register_extra_handlers(bot):
     @bot.message_handler(commands=['pocket'])
     def _h_pocket(m): _play_game(
         bot, m,
-        chance=0.69, multiplier=1.4,
+        chance=0.6, multiplier=2,
         win_texts=[
             "😎Молодец, воришка. Ты потерял свои деньги на ходу, но получил больше - аж {win} бублей!",
             "✨❄️Моя школа! {win} тебе начислено за твой проворот."
@@ -1349,7 +1349,7 @@ def register_extra_handlers(bot):
     @bot.message_handler(commands=['casino'])
     def _h_casino(m): _play_game(
         bot, m,
-        chance=0.35, multiplier=3.0,
+        chance=0.4, multiplier=3.0,
         win_texts=[
             "🎰 Джекпот! {win} бублей за ставку {bet}.",
             "🎲 Везёт! Забираешь {win} бублей (ставка {bet})."
@@ -1363,7 +1363,7 @@ def register_extra_handlers(bot):
     @bot.message_handler(commands=['loto'])
     def _h_loto(m): _play_game(
         bot, m,
-        chance=0.08, multiplier=18.0,
+        chance=0.2, multiplier=6.0,
         win_texts=[
             "🎟 Счастливый билет! +{win} бублей (ставка {bet}).",
             "🌟 Умный человек в очках выиграл {win} бублей скачать обои"
