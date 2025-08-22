@@ -136,6 +136,28 @@ def _buy_property_record(user_id, key):
         conn.execute("INSERT OR IGNORE INTO properties (user_id, property_key) VALUES (?, ?)", (user_id, key))
         conn.commit()
 
+# --- Compatibility wrapper: фикс для опечатки buy_property_handler vs property_buy_handler ---
+# Некоторые места в коде вызывают buy_property_handler(...), а реальная функция называется property_buy_handler.
+# Чтобы избежать ошибки "name 'buy_property_handler' is not defined", добавляем простой wrapper.
+
+def buy_property_handler(bot, message):
+    """
+    Compatibility wrapper — вызывает property_buy_handler (реальная логика покупки).
+    Оставляем, чтобы регистрация команд, которая использует buy_property_handler, работала корректно.
+    """
+    # Если у тебя реальная функция называется иначе, поменяй сюда имя.
+    try:
+        return property_buy_handler(bot, message)
+    except NameError:
+        # Если property_buy_handler отсутствует, пробуем альтернативы
+        try:
+            return buy_command_handler(bot, message)
+        except NameError:
+            # В крайнем случае — ответим об ошибке, но такого не должно быть
+            bot.reply_to(message, "❌ Ошибка: обработчик покупки не найден (notify admin).")
+            return
+            
+
 def _get_properties(user_id):
     with db.get_connection() as conn:
         rows = conn.execute("SELECT property_key FROM properties WHERE user_id=?", (user_id,)).fetchall()
@@ -601,6 +623,53 @@ def xhp_handler(bot, message):
         return
     bot.send_message(message.chat.id, parts[1])
 
+# === Админская рассылка /soo ===
+def soo_handler(bot, message):
+    """
+    /soo <текст>  -- только OWNER_ID
+    Отправляет <текст> в личные сообщения всем пользователям из таблицы users
+    и пытается отправить в каждый chat_id, сохранённый в users.last_seen_chat.
+    Спит между отправками, чтобы минимизировать риск rate-limit.
+    """
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Нет доступа")
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /soo <текст>")
+        return
+    text = parts[1]
+
+    sent_users = 0
+    failed_users = 0
+    sent_chats = 0
+    failed_chats = 0
+
+    with db.get_connection() as conn:
+        rows = conn.execute("SELECT user_id, last_seen_chat FROM users").fetchall()
+
+    for user_id, last_chat in rows:
+        # Отправляем в ЛС
+        try:
+            bot.send_message(user_id, text)
+            sent_users += 1
+        except Exception:
+            failed_users += 1
+        # Небольшая пауза, чтобы снизить риск временных лимитов
+        time.sleep(0.05)
+
+    # Попробуем отправить в чаты (last_seen_chat может быть NULL)
+    chat_ids = set([r[1] for r in rows if r[1]])
+    for chat_id in chat_ids:
+        try:
+            bot.send_message(chat_id, text)
+            sent_chats += 1
+        except Exception:
+            failed_chats += 1
+        time.sleep(0.05)
+
+    bot.reply_to(message, f"✅ Рассылка завершена. ЛС: {sent_users} / {sent_users+failed_users}, Чаты: {sent_chats} / {sent_chats+failed_chats}")
 # === wipe_prop (админ) ===
 def wipe_prop_handler(bot, message):
     if message.from_user.id != OWNER_ID:
@@ -615,7 +684,7 @@ def wipe_prop_handler(bot, message):
 EMOJIS = [
     "😀","😎","🤡","👻","💀","🐵","🐸","🐱","🦊","🐼",
     "🐨","🐯","🦁","🐮","🐷","🐔","🐧","🐦","🐤","🐣",
-    "🐥","🦆","🦅","🦉","🐺"
+    "🐥","🦆","🦅","🦉","🐺","🥰","🍎","😃","🙄","🎃","🤓","🤔"
 ]
 
 def luck_handler(bot, message):
