@@ -137,6 +137,10 @@ def _update_treasure_balance(delta: int) -> None:
             log.error(f"_update_treasure_balance error: {e}")
         except:
             pass
+def _treasury_add(amount: int) -> None:
+    """Добавляет бубли в сокровищницу."""
+    _update_treasure_balance(amount)
+
 # ======= Конец блока: сокровищница (DB) =======
         
 _ensure_tables()
@@ -921,7 +925,7 @@ def chests_handler(bot, message):
     for i, sq in enumerate(chosen):
         cb = f"chests_{uid}_{i}"
         markup.add(types.InlineKeyboardButton(sq, callback_data=cb))
-    bot.send_message(message.chat.id, "🗝️ Выбирай сундук:", reply_markup=markup)
+    bot.send_message(message.chat.id, "🗝️ По радио ты услышал легенду о счастливых сундуках. От отчаяния, ты пошёл в пещеру их искать. Легенда была права, хоть ей никто и не верил... \n Выбирай сундук:", reply_markup=markup)
 
 def chests_callback_handler(bot, call):
     try:
@@ -930,7 +934,7 @@ def chests_callback_handler(bot, call):
             return
         uid = int(parts[1])
         if call.from_user.id != uid:
-            bot.answer_callback_query(call.id, "❌ Это не твои сундуки", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Не открывай сундуки другого путника!", show_alert=True)
             return
         try:
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
