@@ -24,7 +24,7 @@ PROPERTIES = {
         "command": "mafia",
         "cooldown": 20,
         "income": (140, 740),
-        "message": "🥷Ты выполнил маленькое задание от мафии, получив зарплату {money} бублей"
+        "message": "🥷Ты выполнил маленькое задание от мафии, получив зарплату {money} бублей\n\nБаланс: {balance} бублей"
     },
     "communal": {
         "name": "Коммуналка в гетто",
@@ -32,7 +32,7 @@ PROPERTIES = {
         "command": "clean",
         "cooldown": 30,
         "income": (500, 1800),
-        "message": "🫧 🧽Ты помыл пол в соседнем общежитии, и тебе скинулись {money} бублей"
+        "message": "🫧 🧽Ты помыл пол в соседнем общежитии, и тебе скинулись {money} бублей\n\nБаланс: {balance} бублей"
     },
     "country": {
         "name": "Загородный дом",
@@ -40,7 +40,7 @@ PROPERTIES = {
         "command": "pizza",
         "cooldown": 60,
         "income": (3000, 7000),
-        "message": "🍕Ты поработал курьером пиццы и выполнил доставку, за которую тебе заплатили {money} бублей. Баланс: {balance}"
+        "message": "🍕Ты поработал курьером пиццы и выполнил доставку, за которую тебе заплатили {money} бублей.\n\n Баланс: {balance} бублей"
     }
 }
 
@@ -1255,6 +1255,9 @@ def register_extra_handlers(bot):
 
     @bot.message_handler(commands=['wipe_prop'])
     def _h_wipeprop(m): wipe_prop_handler(bot, m)
+    
+    @bot.message_handler(commands=['soo'])
+    def _h_soo(m): soo_handler(bot, m)
 
     # дуэли
     @bot.message_handler(commands=['sf'])
