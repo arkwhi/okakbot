@@ -530,7 +530,7 @@ def bubl_callback_handler(bot, call):
         )
 
         mapping = {
-            "pocket": (0.69, 1.4,
+            "pocket": (0.6, 2,
                        ["😎Молодец, воришка. Ты потерял свои деньги на ходу, но получил больше - аж {win} бублей!",
                         "✨❄️Моя школа! {win} тебе начислено за твой проворот."],
                        ["🙄Ну ты и лоханулся... мало того, что ты ничего не украл, так у тебя украли {bet}!",
@@ -540,7 +540,7 @@ def bubl_callback_handler(bot, call):
                         "🎲 Везёт! Забираешь {win} бублей (ставка {bet})."],
                        ["🃏 Крупье улыбается… Ставка {bet} ушла в дом.",
                         "💸 Рулетка безжалостна. Минус {bet}."]),
-            "loto": (0.08, 18.0,
+            "loto": (0.15, 10.0,
                      ["🎟 Счастливый билет! +{win} бублей (ставка {bet}).",
                       "🌟 Умный человек в очках выиграл {win} бублей скачать обои"],
                      ["🪙 Ой-ой-ой, не повезло. Ставка в аж {bet} бублей ушла в воздух.",
@@ -902,11 +902,11 @@ def luck_callback_handler(bot, call):
         if chosen == lucky_index:
             gain = bal * 5
             _update_balance(uid, gain)
-            bot.send_message(call.message.chat.id, f"🎉 Удача! Баланс умножен в 5 раз.\n💰 Теперь у тебя {_get_balance(uid)} бублей.")
+            bot.send_message(call.message.chat.id, f"🎉 Настоящий рандом показал свою хорошую сторону тебе! Баланс умножен в 5 раз.\n💰 Теперь у тебя {_get_balance(uid)} бублей.")
         else:
             loss = bal // 2
             _update_balance(uid, -loss)
-            bot.send_message(call.message.chat.id, f"💀 Не повезло. Минус {loss} бублей.\n💰 Остаток: {_get_balance(uid)}")
+            bot.send_message(call.message.chat.id, f"💀 Удача отвернулась от тебя. Минус {loss} бублей.\n💰 Остаток: {_get_balance(uid)}")
         bot.answer_callback_query(call.id)
     except Exception as e:
         log.error(f"luck_callback_handler error: {e}")
@@ -914,7 +914,7 @@ def luck_callback_handler(bot, call):
         except: pass
 
 # === /chests ===
-CHEST_COOLDOWN = 60
+CHEST_COOLDOWN = 30
 SQUARES = ["🟥", "🟦", "🟩", "🟨", "🟪", "⬜️", "🟫", "⬛️"]
 
 def chests_handler(bot, message):
@@ -931,7 +931,7 @@ def chests_handler(bot, message):
     for i, sq in enumerate(chosen):
         cb = f"chests_{uid}_{i}"
         markup.add(types.InlineKeyboardButton(sq, callback_data=cb))
-    bot.send_message(message.chat.id, "🗝️ По радио ты услышал легенду о счастливых сундуках. От отчаяния, ты пошёл в пещеру их искать. Легенда была права, хоть ей никто и не верил... \n Выбирай сундук:", reply_markup=markup)
+    bot.send_message(message.chat.id, "🗝️ По радио ты услышал легенду о счастливых сундуках. От отчаяния, ты пошёл в пещеру их искать. Легенда была права, хоть ей никто и не верил... \n\n Выбирай сундук:", reply_markup=markup)
 
 def chests_callback_handler(bot, call):
     try:
@@ -952,14 +952,14 @@ def chests_callback_handler(bot, call):
             amount = random.randint(2000, 6000)
             _update_balance(uid, amount)
             _treasury_add(amount)   # 100% в сокровищницу
-            bot.send_message(call.message.chat.id, f"🎉 {name}, сундук, который ты открыл, оказался щедрым! Ты нашёл +{amount} бублей.\n💰 Баланс: {_get_balance(uid)}")
+            bot.send_message(call.message.chat.id, f"🎉 {name}, сундук, который ты открыл, оказался щедрым! Он тебя лично поблагодарил за приход и подарил +{amount} бублей.\n💰 Баланс: {_get_balance(uid)}")
         elif roll < 0.7:
             amount = random.randint(1000, 4000)
             _update_balance(uid, -amount)
             _treasury_add(amount)   # 100% в сокровищницу
-            bot.send_message(call.message.chat.id, f"💀 {name}, сундук владеет чёрной магией. Минус {amount} бублей.\n💰 Баланс: {_get_balance(uid)}")
+            bot.send_message(call.message.chat.id, f"💀 {name}, сундук владеет чёрной магией. Вдруг, он уничтожил несколько купюр в твоём кошельке. Минус {amount} бублей.\n💰 Баланс: {_get_balance(uid)}")
         else:
-            bot.send_message(call.message.chat.id, f"📦 {name}, сундук пуст... Может, он просто спит.")
+            bot.send_message(call.message.chat.id, f"📦 {name}, сундук тебе ничего не дал... Может, он просто спит.")
         bot.answer_callback_query(call.id)
     except Exception as e:
         log.error(f"chests_callback_handler: {e}")
