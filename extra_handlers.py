@@ -1,5 +1,5 @@
 # extra_handlers.py — полный обновлённый файл
-import random, re, logging, time, threading, math
+import random, re, logging, time, threading, math, unicodedata
 from types import SimpleNamespace
 from telebot import types
 from database import Database
@@ -93,6 +93,8 @@ def _ensure_tables():
             id INTEGER PRIMARY KEY CHECK (id=1),
             balance INTEGER NOT NULL
         )""")
+        conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_nick_unique ON nicknames (nickname COLLATE NOCASE)""")
+        
         conn.commit()
 # ======= Начало блока: сокровищница (DB) =======
 def _ensure_treasure_table():
@@ -807,6 +809,7 @@ def pizza_handler(bot, message):
     property_income_handler(bot, message, "country")
 
 # === Ник/о себе ===
+
 NICK_RE = re.compile(r'(?i)^окак\s+ник\s+(.+)$')
 
 def nickname_handler(bot, message):
@@ -816,9 +819,72 @@ def nickname_handler(bot, message):
     if not m:
         bot.reply_to(message, "❗ Используй: Окак ник <твой ник>")
         return
-    nick = m.group(1).strip()
-    _set_nickname(message.from_user.id, nick)
-    bot.reply_to(message, f"✅ Теперь твой ник: {nick}")
+
+    raw_nick = m.group(1).strip()
+
+    # Нормализация и сжатие пробелов
+    nick = unicodedata.normalize('NFKC', raw_nick)
+    nick = ' '.join(nick.split())  # удаляем лишние пробелы
+
+    # Базовые проверки
+    if not nick:
+        bot.reply_to(message, "❗ Ник не может быть пустым.")
+        return
+
+    MAX_NICK_LEN = 25
+    if len(nick) > MAX_NICK_LEN:
+        bot.reply_to(message, f"❗ Ник слишком длинный ({len(nick)}/{MAX_NICK_LEN}). Максимум {MAX_NICK_LEN} символов.")
+        return
+
+    # Запрет переносов строк
+    if '\n' in nick or '\r' in nick:
+        bot.reply_to(message, "❗ Ник не должен содержать переносы строк.")
+        return
+
+    # Запрет "глитч"-символов: управляющие символы, combining marks, zero-width, variation selectors, приватные области
+    for ch in nick:
+        cat = unicodedata.category(ch)  # 'Ll','Mn','Cc' и т.д.
+        code = ord(ch)
+
+        # запрещаем управляющие символы и combining marks
+        if cat.startswith('C') or cat.startswith('M'):
+            bot.reply_to(message, "❗ Ник содержит недопустимые символы (управляющие / комбинирующие). Убери необычные символы и попробуй снова.")
+            return
+
+        # zero-width / invisible / directionals / BOM
+        if (0x200B <= code <= 0x200F) or (0x202A <= code <= 0x202E) or code == 0xFEFF:
+            bot.reply_to(message, "❗ Ник содержит невидимые символы (zero-width). Убери их и попробуй снова.")
+            return
+
+        # variation selectors (модификаторы эмодзи)
+        if 0xFE00 <= code <= 0xFE0F:
+            bot.reply_to(message, "❗ Ник содержит недопустимые модификаторы символов. Убери их и попробуй снова.")
+            return
+
+        # приватная область
+        if (0xE000 <= code <= 0xF8FF) or (0xF0000 <= code <= 0xFFFFD) or (0x100000 <= code <= 0x10FFFD):
+            bot.reply_to(message, "❗ Ник содержит запрещённые символы. Выбери другой ник.")
+            return
+
+    # Проверка уникальности (case-insensitive)
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute("SELECT user_id FROM nicknames WHERE LOWER(nickname)=LOWER(?)", (nick,)).fetchone()
+            if row and row[0] != message.from_user.id:
+                bot.reply_to(message, "❗ Этот ник уже занят другим пользователем. Выбери другой.")
+                return
+    except Exception as e:
+        log.exception(f"nickname uniqueness check error: {e}")
+        bot.reply_to(message, "❌ Ошибка при проверке ника. Попробуй позже.")
+        return
+
+    # Всё ок — сохраняем
+    try:
+        _set_nickname(message.from_user.id, nick)
+        bot.reply_to(message, f"✅ Теперь твой ник: {nick}")
+    except Exception as e:
+        log.exception(f"nickname save error: {e}")
+        bot.reply_to(message, "❌ Не удалось сохранить ник — попробуй позже.")
 
 def osebe_handler(bot, message):
     register_user(message)
