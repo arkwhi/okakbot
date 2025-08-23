@@ -227,6 +227,25 @@ def _update_balance(user_id: int, delta: int):
         )
         conn.commit()
 
+# ===Hourly tax===
+def _apply_hourly_tax_for_owner(slave_id: int, owner_id: int):
+    """
+    Снимает 30% баланса с раба и переводит его владельцу.
+    """
+    try:
+        slave_balance = _get_balance(slave_id)
+        if slave_balance <= 0:
+            return  # нечего забирать
+        tax = int(slave_balance * 0.3)
+
+        # снять с раба
+        _update_balance(slave_id, -tax)
+        # выдать владельцу
+        _update_balance(owner_id, tax)
+
+        log.info(f"Slave tax: {slave_id} -> {owner_id}, amount={tax}")
+    except Exception as e:
+        log.error(f"_apply_hourly_tax_for_owner error: {e}")
 # === Окак-Токены ===
 def _get_tokens(user_id: int) -> int:
     with db.get_connection() as conn:
@@ -1353,6 +1372,145 @@ def xhp_handler(bot, message):
         return
     bot.send_message(message.chat.id, parts[1])
 
+# === Admin: add/remove property handlers (only OWNER) ===
+def _normalize_property_key(key_raw: str):
+    """Вернёт canonical key из PROPERTIES по разным вариантам ввода или None."""
+    if not key_raw:
+        return None
+    k = key_raw.lower().strip()
+    # прямое совпадение с ключом
+    if k in PROPERTIES:
+        return k
+    # синонимы
+    synonyms = {
+        "hut": ("hut", "хижина", "хижина_на_отшибе"),
+        "communal": ("communal", "коммуналка", "коммуналка_в_гетто"),
+        "country": ("country", "загородный", "загородный_дом"),
+        "cottage": ("cottage", "коттедж", "стандартный"),
+        "villa": ("villa", "вилла", "моря"),
+        "mansion": ("mansion", "особняк", "роскошный_особняк"),
+    }
+    for canon, variants in synonyms.items():
+        if k in variants:
+            return canon
+    return None
+
+def _find_user_id_from_mention_or_id(raw: str):
+    """Ищем user_id по строке: @username или строка с цифрами. Возвращает int или None."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    if raw.isdigit():
+        return int(raw)
+    username = raw.lstrip("@")
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute("SELECT user_id FROM users WHERE username=?", (username,)).fetchone()
+            return row[0] if row else None
+    except Exception as e:
+        log.exception(f"_find_user_id_from_mention_or_id error: {e}")
+        return None
+
+def add_prop_handler(bot, message):
+    """
+    /add_prop @username <property_key>  -- только OWNER, добавить недвижимость пользователю
+    Можно использовать reply: ответьте командой на сообщение пользователя и укажите ключ: /add_prop hut
+    """
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Нет доступа")
+        return
+
+    register_user(message)  # безопасно — гарантирует наличие пользователя в БД
+
+    # извлекаем цель и ключ
+    target_id = None
+    parts = (message.text or "").split()
+    if getattr(message, "reply_to_message", None) and message.reply_to_message.from_user:
+        # если reply — /add_prop hut  или /add_prop  hut (в reply)
+        if len(parts) >= 2:
+            key_raw = parts[1]
+        else:
+            bot.reply_to(message, "❗ В reply-режиме: укажите ключ свойства: /add_prop <ключ>")
+            return
+        target_id = message.reply_to_message.from_user.id
+    else:
+        if len(parts) < 3:
+            bot.reply_to(message, "❗ Использование: /add_prop @username <ключ> (например: /add_prop @ivan hut)")
+            return
+        target_raw = parts[1]
+        key_raw = parts[2]
+        target_id = _find_user_id_from_mention_or_id(target_raw)
+        if not target_id:
+            bot.reply_to(message, "❌ Пользователь не найден в базе. Попросите написать боту /start.")
+            return
+
+    key = _normalize_property_key(key_raw)
+    if not key:
+        bot.reply_to(message, "❗ Неизвестный ключ недвижимости. Доступно: " + ", ".join(PROPERTIES.keys()))
+        return
+
+    # проверка — есть ли уже
+    owned = _get_properties(target_id)
+    if key in owned:
+        bot.reply_to(message, f"ℹ️ У {_display_name(target_id)} уже есть {PROPERTIES[key]['name']}.")
+        return
+
+    # записываем
+    try:
+        _buy_property_record(target_id, key)
+        bot.reply_to(message, f"✅ {PROPERTIES[key]['name']} добавлена пользователю {_display_name(target_id)}.")
+    except Exception as e:
+        log.exception(f"add_prop_handler error: {e}")
+        bot.reply_to(message, "❌ Ошибка при добавлении недвижимости.")
+
+def remove_prop_handler(bot, message):
+    """
+    /remove_prop @username <property_key>  -- только OWNER, удалить недвижимость у пользователя
+    Можно использовать reply: ответ на сообщение пользователя и указать ключ: /remove_prop hut
+    """
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Нет доступа")
+        return
+
+    register_user(message)
+
+    parts = (message.text or "").split()
+    if getattr(message, "reply_to_message", None) and message.reply_to_message.from_user:
+        if len(parts) >= 2:
+            key_raw = parts[1]
+        else:
+            bot.reply_to(message, "❗ В reply-режиме: укажите ключ свойства: /remove_prop <ключ>")
+            return
+        target_id = message.reply_to_message.from_user.id
+    else:
+        if len(parts) < 3:
+            bot.reply_to(message, "❗ Использование: /remove_prop @username <ключ>")
+            return
+        target_raw = parts[1]
+        key_raw = parts[2]
+        target_id = _find_user_id_from_mention_or_id(target_raw)
+        if not target_id:
+            bot.reply_to(message, "❌ Пользователь не найден в базе.")
+            return
+
+    key = _normalize_property_key(key_raw)
+    if not key:
+        bot.reply_to(message, "❗ Неизвестный ключ недвижимости. Доступно: " + ", ".join(PROPERTIES.keys()))
+        return
+
+    # проверка наличия и удаление
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute("SELECT 1 FROM properties WHERE user_id=? AND property_key=?", (target_id, key)).fetchone()
+            if not row:
+                bot.reply_to(message, f"ℹ️ У {_display_name(target_id)} нет {PROPERTIES[key]['name']}.")
+                return
+            conn.execute("DELETE FROM properties WHERE user_id=? AND property_key=?", (target_id, key))
+            conn.commit()
+        bot.reply_to(message, f"✅ {PROPERTIES[key]['name']} удалена у {_display_name(target_id)}.")
+    except Exception as e:
+        log.exception(f"remove_prop_handler error: {e}")
+        bot.reply_to(message, "❌ Ошибка при удалении недвижимости.")
 # === Админская рассылка /soo ===
 def soo_handler(bot, message):
     if message.from_user.id != OWNER_ID:
@@ -2029,6 +2187,12 @@ def register_extra_handlers(bot):
 
     @bot.message_handler(commands=['wipe_prop'])
     def _h_wipeprop(m): wipe_prop_handler(bot, m)
+    
+    @bot.message_handler(commands=['add_prop'])
+    def _h_add_prop(m): add_prop_handler(bot, m)
+
+    @bot.message_handler(commands=['remove_prop'])
+    def _h_remove_prop(m): remove_prop_handler(bot, m)
 
     @bot.message_handler(commands=['wipe_nick'])
     def _h_wipe_nick(m): wipe_nick_handler(bot, m)
