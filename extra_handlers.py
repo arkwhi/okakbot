@@ -1489,7 +1489,7 @@ def ensl_handler(bot, message):
         return
     owner = message.from_user.id
     if owner == target_id:
-        bot.reply_to(message, "❌ Нельзя поработить себя.")
+        bot.reply_to(message, "❌ Дитя, себя в рабах держать нельзя")
         return
     # кулдаун
     now = time.time()
@@ -1499,7 +1499,7 @@ def ensl_handler(bot, message):
         return
     # цель — не уже раб
     if _is_slave(target_id):
-        bot.reply_to(message, "❌ Цель уже является чьим-то рабом.")
+        bot.reply_to(message, "❌ Берега попутал, дитя. Раба чужого воровать скверное дело.")
         _last_ensl[owner] = now
         return
     # цель — не рабовладелец
@@ -1688,7 +1688,7 @@ def register_extra_handlers(bot):
     def _h_transfer(m): transfer_handler(bot, m)
     
     # cottage
-    @bot.message_handler(commands=['buy_cottage''])
+    @bot.message_handler(commands=['buy_cottage'])
     def _h_buy_cottage(m): buy_cottage_handler(bot, m)
 
     @bot.message_handler(commands=['cottage'])
