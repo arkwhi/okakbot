@@ -518,6 +518,116 @@ def _delayed_delete_message(bot, chat_id, message_id, delay=8):
             pass
     threading.Timer(delay, _del).start()
 
+# ===ВАЙП НИКА, УДАЛЕНИЕ НИКА===
+
+# если OWNER_ID объявлен где-то ещё, используем его, иначе -- дефолт
+OWNER_ID = globals().get('OWNER_ID', 5758264503)
+
+def _find_user_id_by_username_fallback(username_no_at: str):
+    """
+    Попытка найти user_id по username в таблице users.
+    Вернёт либо user_id (int), либо None.
+    """
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute("SELECT user_id FROM users WHERE username = ?", (username_no_at,)).fetchone()
+            return row[0] if row else None
+    except Exception as e:
+        try:
+            log.exception(f"_find_user_id_by_username_fallback error: {e}")
+        except:
+            pass
+        return None
+
+def _remove_nickname_by_user_id(user_id: int) -> bool:
+    """Удаляет ник пользователя из таблицы nicknames. Возвращает True если была запись."""
+    try:
+        with db.get_connection() as conn:
+            # проверим, есть ли ник
+            r = conn.execute("SELECT 1 FROM nicknames WHERE user_id = ?", (user_id,)).fetchone()
+            if not r:
+                return False
+            conn.execute("DELETE FROM nicknames WHERE user_id = ?", (user_id,))
+            conn.commit()
+            return True
+    except Exception as e:
+        try:
+            log.exception(f"_remove_nickname_by_user_id error: {e}")
+        except:
+            pass
+        return False
+
+def wipe_nick_handler(bot, message):
+    """
+    /wipe_nick  -- удаляет все ника из таблицы nicknames. Только OWNER.
+    """
+    try:
+        if message.from_user.id != OWNER_ID:
+            bot.reply_to(message, "❌ Нет доступа")
+            return
+
+        with db.get_connection() as conn:
+            row = conn.execute("SELECT COUNT(*) FROM nicknames").fetchone()
+            total = row[0] if row else 0
+            if total == 0:
+                bot.reply_to(message, "ℹ️ В таблице никнеймов ничего нет.")
+                return
+            conn.execute("DELETE FROM nicknames")
+            conn.commit()
+        bot.reply_to(message, f"✅ Удалено {total} ник(ов).")
+    except Exception as e:
+        try:
+            log.exception(f"wipe_nick_handler error: {e}")
+        except:
+            pass
+        bot.reply_to(message, "❌ Ошибка при очистке никнеймов")
+
+def delete_nick_handler(bot, message):
+    """
+    /delete_nick @username  -- удаляет ник указанного пользователя (или по id), только OWNER
+    Дополнительно: поддерживается reply — если команда использована ответом на сообщение, удаляет ник ответного пользователя.
+    """
+    try:
+        if message.from_user.id != OWNER_ID:
+            bot.reply_to(message, "❌ Нет доступа")
+            return
+
+        # если команда использована в ответе — целевой пользователь берём из reply
+        if getattr(message, 'reply_to_message', None) and message.reply_to_message.from_user:
+            target_id = message.reply_to_message.from_user.id
+        else:
+            text = (message.text or "").strip()
+            m = re.match(r"(?i)^/delete_nick\s+(@?[A-Za-z0-9_]{1,32}|\d+)\s*$", text)
+            if not m:
+                bot.reply_to(message, "❗ Используй: /delete_nick @username или /delete_nick <user_id>, либо ответь командой на сообщение пользователя.")
+                return
+            target_raw = m.group(1)
+            if target_raw.isdigit():
+                target_id = int(target_raw)
+            else:
+                username = target_raw.lstrip("@")
+                # сначала попробуем использовать существующую утилиту, если она есть
+                finder = globals().get('_find_user_id_by_username')
+                if callable(finder):
+                    target_id = finder(username)
+                else:
+                    target_id = _find_user_id_by_username_fallback(username)
+
+        if not target_id:
+            bot.reply_to(message, "❌ Пользователь не найден в базе (он должен был когда-то писать боту).")
+            return
+
+        removed = _remove_nickname_by_user_id(target_id)
+        if removed:
+            bot.reply_to(message, f"✅ Ник пользователя {_display_name(target_id)} удалён.")
+        else:
+            bot.reply_to(message, f"ℹ️ У {_display_name(target_id)} не было ника.")
+    except Exception as e:
+        try:
+            log.exception(f"delete_nick_handler error: {e}")
+        except:
+            pass
+        bot.reply_to(message, "❌ Ошибка при удалении ника")
 # === Базовые хендлеры ===
 def id_handler(bot, message):
     bot.reply_to(message, f"🆔 Твой Telegram ID: {message.from_user.id}")
@@ -848,12 +958,12 @@ def nickname_handler(bot, message):
 
         # запрещаем управляющие символы и combining marks
         if cat.startswith('C') or cat.startswith('M'):
-            bot.reply_to(message, "❗ Ник содержит недопустимые символы (управляющие / комбинирующие). Убери необычные символы и попробуй снова.")
+            bot.reply_to(message, "❗ Ник содержит недопустимые символы. Не будь идиотом. Убери плохие символы и попробуй снова.")
             return
 
         # zero-width / invisible / directionals / BOM
         if (0x200B <= code <= 0x200F) or (0x202A <= code <= 0x202E) or code == 0xFEFF:
-            bot.reply_to(message, "❗ Ник содержит невидимые символы (zero-width). Убери их и попробуй снова.")
+            bot.reply_to(message, "❗ Ник содержит невидимые символы. Убери их и попробуй снова.")
             return
 
         # variation selectors (модификаторы эмодзи)
