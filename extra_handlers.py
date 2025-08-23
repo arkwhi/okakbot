@@ -1650,6 +1650,113 @@ def tre_callback_handler(bot, call):
         except:
             pass
 
+# --- Slave management helpers (вставить перед ensl_handler) ---
+def _is_slave(user_id):
+    """
+    Возвращает owner_id если user_id является рабом, иначе None.
+    """
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute("SELECT owner_id FROM slaves WHERE slave_id = ?", (user_id,)).fetchone()
+            return row[0] if row else None
+    except Exception as e:
+        log.exception(f"_is_slave error: {e}")
+        return None
+
+def _enslave(owner_id, slave_id):
+    """
+    Сделать slave_id рабом owner_id. Возвращает True при успешном порабощении, False иначе.
+    Не позволяет поработить самого себя или поработить уже порабощённого.
+    Устанавливает enslaved_at = now и last_tax_ts = now (чтобы не взимать налог сразу).
+    """
+    try:
+        if owner_id == slave_id:
+            return False
+        with db.get_connection() as conn:
+            # если уже есть хозяин — отказ
+            r = conn.execute("SELECT owner_id FROM slaves WHERE slave_id = ?", (slave_id,)).fetchone()
+            if r:
+                return False
+            ts = int(time.time())
+            conn.execute(
+                "INSERT INTO slaves (slave_id, owner_id, enslaved_at, last_tax_ts) VALUES (?, ?, ?, ?)",
+                (slave_id, owner_id, ts, ts)
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        log.exception(f"_enslave error: {e}")
+        return False
+
+def _release_slave(slave_id):
+    """
+    Освобождает раба (удаляет запись).
+    """
+    try:
+        with db.get_connection() as conn:
+            conn.execute("DELETE FROM slaves WHERE slave_id = ?", (slave_id,))
+            conn.commit()
+        return True
+    except Exception as e:
+        log.exception(f"_release_slave error: {e}")
+        return False
+
+def _get_slaves_of(owner_id):
+    """
+    Возвращает список кортежей (slave_id, enslaved_at, last_tax_ts) для данного владельца.
+    """
+    try:
+        with db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT slave_id, enslaved_at, last_tax_ts FROM slaves WHERE owner_id = ?",
+                (owner_id,)
+            ).fetchall()
+            return [(r[0], r[1], r[2]) for r in rows]
+    except Exception as e:
+        log.exception(f"_get_slaves_of error: {e}")
+        return []
+
+def _apply_hourly_tax_for_owner(owner_id):
+    """
+    Для каждого раба owner_id, если прошёл >= 1 часа с last_tax_ts,
+    снимает 30% от баланса раба и переводит владельцу.
+    Обновляет last_tax_ts до текущего времени. Возвращает суммарно собранную сумму.
+    """
+    total_collected = 0
+    now = int(time.time())
+    try:
+        with db.get_connection() as conn:
+            rows = conn.execute("SELECT slave_id, last_tax_ts FROM slaves WHERE owner_id = ?", (owner_id,)).fetchall()
+        for slave_id, last_ts in rows:
+            if last_ts is None:
+                last_ts = 0
+            # налог раз в час
+            if now - int(last_ts) < 3600:
+                continue
+            slave_bal = _get_balance(slave_id)
+            if slave_bal <= 0:
+                # просто обновим last_tax_ts, чтобы не пытаться снова
+                with db.get_connection() as conn:
+                    conn.execute("UPDATE slaves SET last_tax_ts = ? WHERE slave_id = ?", (now, slave_id))
+                    conn.commit()
+                continue
+            tax = int(math.floor(abs(slave_bal) * 0.30))
+            if tax <= 0:
+                with db.get_connection() as conn:
+                    conn.execute("UPDATE slaves SET last_tax_ts = ? WHERE slave_id = ?", (now, slave_id))
+                    conn.commit()
+                continue
+            # переводим: снимаем с раба, добавляем владельцу
+            _update_balance(slave_id, -tax)
+            _update_balance(owner_id, tax)
+            total_collected += tax
+            # обновляем метку времени
+            with db.get_connection() as conn:
+                conn.execute("UPDATE slaves SET last_tax_ts = ? WHERE slave_id = ?", (now, slave_id))
+                conn.commit()
+    except Exception as e:
+        log.exception(f"_apply_hourly_tax_for_owner error: {e}")
+    return total_collected
 # === Система рабства: /ensl, /sl, /desl, /escape, /sl_sell, /sl_buy, /topsl ===
 def ensl_handler(bot, message):
     register_user(message)
