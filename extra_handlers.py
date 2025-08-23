@@ -753,7 +753,7 @@ def property_income_handler(bot, message, key):
     uid = message.from_user.id
     p = PROPERTIES[key]
     if key not in _get_properties(uid):
-        bot.reply_to(message, f"❌ Нет {p['name']} (стоит {p['price']})")
+        bot.reply_to(message, f"❌ У вас нет {p['name']} (стоит {p['price']} бублей)")
         return
     now = time.time()
     last = _last_income.get((uid, key), 0)
@@ -792,10 +792,10 @@ def buy_villa_handler(bot, message):
     buy_property_handler(bot, fake)
 
 def villa_handler(bot, message):
-    property_income_handler(bot, message, "lawyer")
+    property_income_handler(bot, message, "villa")
     
 def waiter_handler(bot, message):
-    property_income_handler(bot, message, "waiter")
+    property_income_handler(bot, message, "cottage")
 
 def mafia_handler(bot, message):
     property_income_handler(bot, message, "hut")
