@@ -41,9 +41,24 @@ PROPERTIES = {
         "cooldown": 60,
         "income": (3000, 7000),
         "message": "🍕Ты поработал курьером пиццы и выполнил доставку, за которую тебе заплатили {money} бублей.\n\n Баланс: {balance} бублей"
+    },
+    "cottage": {
+    "name": "Стандартный коттедж",
+    "price": 950000,
+    "command": "waiter",
+    "cooldown": 120,
+    "income": (6500, 16500),
+    "message": "🧑‍💼🍽️Ты подработал, разнося блюда в ресторане. Тебе не заплатили, но чаевые оставили хорошие! В конце смены ты увидел {money} бублей в своём конверте. \n💰 Баланс: {balance} бублей."
+    }, 
+    "villa": {
+    "name": "Вилла у моря",
+    "price": 2000000,
+    "command": "lawyer",
+    "cooldown": 240,
+    "income": (15000, 35000),
+    "message": "🧑‍⚖️Ты помог тем, кем ты раньше был. Беднякам. Честный юрист, плата от государства и подполья: {money} бублей.\n 💰 Баланс: {balance} бублей."
     }
 }
-
 # === Инициализация таблиц (при первом импорте) ===
 def _ensure_tables():
     with db.get_connection() as conn:
@@ -705,7 +720,7 @@ def property_buy_handler(bot, message):
     register_user(message)
     parts = (message.text or "").split()
     if len(parts) < 2:
-        bot.reply_to(message, "❗ Используй: /buy hut | /buy communal | /buy country")
+        bot.reply_to(message, "❗ Используй: /buy hut | /buy communal | /buy country | /buy cottage | /buy villa")
         return
     key_raw = parts[1].lower()
     if key_raw in ("hut", "хижина", "хижина_на_отшибе"):
@@ -714,6 +729,10 @@ def property_buy_handler(bot, message):
         key = "communal"
     elif key_raw in ("country", "загородный", "загородный_дом"):
         key = "country"
+    elif key_raw in ("cottage", "коттедж", "стандартный"):
+        key = "cottage"
+    elif key_raw in ("villa", "вилла", "моря"):
+        key = "villa"
     else:
         bot.reply_to(message, "❗ Неизвестная недвижимость. Доступно: hut, communal, country")
         return
@@ -727,7 +746,7 @@ def property_buy_handler(bot, message):
         return
     _update_balance(uid, -p["price"])
     _buy_property_record(uid, key)
-    bot.reply_to(message, f"✅ Куплено: {p['name']} за {p['price']}")
+    bot.reply_to(message, f"✅ Куплено: {p['name']} за {p['price']}\n\nБаланс: {_get_balance(uid)} буб.")
 
 def property_income_handler(bot, message, key):
     register_user(message)
@@ -763,6 +782,20 @@ def buy_communal_handler(bot, message):
 def buy_country_handler(bot, message):
     fake = SimpleNamespace(text="/buy country", from_user=message.from_user, chat=message.chat)
     buy_property_handler(bot, fake)
+
+def buy_cottage_handler(bot, message):
+    fake = SimpleNamespace(text="/buy cottage", from_user=message.from_user, chat=message.chat)
+    buy_property_handler(bot, fake)
+
+def buy_villa_handler(bot, message):
+    fake = SimpleNamespace(text="/buy villa", from_user=message.from_user, chat=message.chat)
+    buy_property_handler(bot, fake)
+
+def villa_handler(bot, message):
+    property_income_handler(bot, message, "lawyer")
+    
+def waiter_handler(bot, message):
+    property_income_handler(bot, message, "waiter")
 
 def mafia_handler(bot, message):
     property_income_handler(bot, message, "hut")
@@ -1653,6 +1686,13 @@ def register_extra_handlers(bot):
     # перевод
     @bot.message_handler(func=lambda m: isinstance(m.text, str) and m.text.lower().startswith("дать "))
     def _h_transfer(m): transfer_handler(bot, m)
+    
+    # cottage
+    @bot.message_handler(commands=['buy_cottage''])
+    def _h_buy_cottage(m): buy_cottage_handler(bot, m)
+
+    @bot.message_handler(commands=['cottage'])
+    def _h_cottage(m): cottage_handler(bot, m)
 
     # покупки / работы
     @bot.message_handler(commands=['buy'])
