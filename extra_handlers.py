@@ -1715,6 +1715,13 @@ def register_extra_handlers(bot):
 
     @bot.message_handler(commands=['pizza'])
     def _h_pizza(m): pizza_handler(bot, m)
+    
+    # в register_extra_handlers должно быть нечто вроде
+    @bot.message_handler(commands=['waiter'])
+    def _h_waiter(m): waiter_handler(bot, m)
+
+    @bot.message_handler(commands=['lawyer'])
+    def _h_lawyer(m): lawyer_handler(bot, m)
 
     # ник
     @bot.message_handler(func=lambda m: isinstance(m.text, str) and re.match(r"(?i)^окак\s+ник\s+(.+)$", (m.text or "").strip()))
