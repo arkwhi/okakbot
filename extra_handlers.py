@@ -791,7 +791,7 @@ def buy_villa_handler(bot, message):
     fake = SimpleNamespace(text="/buy villa", from_user=message.from_user, chat=message.chat)
     buy_property_handler(bot, fake)
 
-def villa_handler(bot, message):
+def lawyer_handler(bot, message):
     property_income_handler(bot, message, "villa")
     
 def waiter_handler(bot, message):
