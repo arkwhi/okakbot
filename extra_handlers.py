@@ -1934,6 +1934,12 @@ def register_extra_handlers(bot):
     
     @bot.message_handler(commands=['soo'])
     def _h_soo(m): soo_handler(bot, m)
+    
+    @bot.message_handler(commands=['wipe_nick'])
+    def _h_wipe_nick(m): wipe_nick_handler(bot, m)
+
+    @bot.message_handler(commands=['delete_nick'])
+    def _h_delete_nick(m): delete_nick_handler(bot, m)
 
     # дуэли
     @bot.message_handler(commands=['sf'])
