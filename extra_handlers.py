@@ -1689,9 +1689,9 @@ def _enslave(owner_id, slave_id):
         return False
 
 def _release_slave(slave_id):
-    """
+    '''
   #  Освобождает раба (удаляет запись).
-    """
+  '''
     try:
         with db.get_connection() as conn:
             conn.execute("DELETE FROM slaves WHERE slave_id = ?", (slave_id,))
