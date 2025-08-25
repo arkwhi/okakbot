@@ -1652,23 +1652,24 @@ def tre_callback_handler(bot, call):
 
 # --- Slave management helpers (вставить перед ensl_handler) ---
 # def _is_slave(user_id):
-    """
+    '''
     Возвращает owner_id если user_id является рабом, иначе None.
-    """ '''
+    '''
+    '''
     try:
         with db.get_connection() as conn:
             row = conn.execute("SELECT owner_id FROM slaves WHERE slave_id = ?", (user_id,)).fetchone()
             return row[0] if row else None
     except Exception as e:
         log.exception(f"_is_slave error: {e}")
-        return None
+        return None '''
 
-def _enslave(owner_id, slave_id):
-    """
+#def _enslave(owner_id, slave_id):
+    '''
    # Сделать slave_id рабом owner_id. Возвращает True при успешном порабощении, False иначе.
     #Не позволяет поработить самого себя или поработить уже порабощённого.
     #Устанавливает enslaved_at = now и last_tax_ts = now (чтобы не взимать налог сразу).'''
-    """
+    '''
     try:
         if owner_id == slave_id:
             return False
