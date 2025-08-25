@@ -1704,7 +1704,7 @@ def _release_slave(slave_id):
 def _get_slaves_of(owner_id):
     """
     #Возвращает список кортежей (slave_id, enslaved_at, last_tax_ts) для данного владельца.
-    """
+    '''''''
     try:
         with db.get_connection() as conn:
             rows = conn.execute(
