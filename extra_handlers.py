@@ -1692,7 +1692,7 @@ def tre_callback_handler(bot, call):
 def _release_slave(slave_id):
     '''
   #  Освобождает раба (удаляет запись).
-  '''
+    '''
     try:
         with db.get_connection() as conn:
             conn.execute("DELETE FROM slaves WHERE slave_id = ?", (slave_id,))
