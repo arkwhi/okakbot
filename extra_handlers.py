@@ -228,9 +228,9 @@ def _update_balance(user_id: int, delta: int):
         conn.commit()
 
 # ===Hourly tax===
-def _apply_hourly_tax_for_owner(slave_id: int, owner_id: int):
+'''def _apply_hourly_tax_for_owner(slave_id: int, owner_id: int):
     """
-    Снимает 30% баланса с раба и переводит его владельцу.
+    #Снимает 30% баланса с раба и переводит его владельцу.
     """
     try:
         slave_balance = _get_balance(slave_id)
@@ -245,7 +245,7 @@ def _apply_hourly_tax_for_owner(slave_id: int, owner_id: int):
 
         log.info(f"Slave tax: {slave_id} -> {owner_id}, amount={tax}")
     except Exception as e:
-        log.error(f"_apply_hourly_tax_for_owner error: {e}")
+        log.error(f"_apply_hourly_tax_for_owner error: {e}")'''
 # === Окак-Токены ===
 def _get_tokens(user_id: int) -> int:
     with db.get_connection() as conn:
@@ -1651,10 +1651,10 @@ def tre_callback_handler(bot, call):
             pass
 
 # --- Slave management helpers (вставить перед ensl_handler) ---
-def _is_slave(user_id):
+# def _is_slave(user_id):
     """
     Возвращает owner_id если user_id является рабом, иначе None.
-    """
+    """ '''
     try:
         with db.get_connection() as conn:
             row = conn.execute("SELECT owner_id FROM slaves WHERE slave_id = ?", (user_id,)).fetchone()
@@ -1665,9 +1665,9 @@ def _is_slave(user_id):
 
 def _enslave(owner_id, slave_id):
     """
-    Сделать slave_id рабом owner_id. Возвращает True при успешном порабощении, False иначе.
+   ''' Сделать slave_id рабом owner_id. Возвращает True при успешном порабощении, False иначе.
     Не позволяет поработить самого себя или поработить уже порабощённого.
-    Устанавливает enslaved_at = now и last_tax_ts = now (чтобы не взимать налог сразу).
+    Устанавливает enslaved_at = now и last_tax_ts = now (чтобы не взимать налог сразу).'''
     """
     try:
         if owner_id == slave_id:
@@ -1690,7 +1690,7 @@ def _enslave(owner_id, slave_id):
 
 def _release_slave(slave_id):
     """
-    Освобождает раба (удаляет запись).
+  #  Освобождает раба (удаляет запись).
     """
     try:
         with db.get_connection() as conn:
@@ -1703,7 +1703,7 @@ def _release_slave(slave_id):
 
 def _get_slaves_of(owner_id):
     """
-    Возвращает список кортежей (slave_id, enslaved_at, last_tax_ts) для данного владельца.
+    #Возвращает список кортежей (slave_id, enslaved_at, last_tax_ts) для данного владельца.
     """
     try:
         with db.get_connection() as conn:
@@ -1718,9 +1718,9 @@ def _get_slaves_of(owner_id):
 
 def _apply_hourly_tax_for_owner(owner_id):
     """
-    Для каждого раба owner_id, если прошёл >= 1 часа с last_tax_ts,
+  '''  Для каждого раба owner_id, если прошёл >= 1 часа с last_tax_ts,
     снимает 30% от баланса раба и переводит владельцу.
-    Обновляет last_tax_ts до текущего времени. Возвращает суммарно собранную сумму.
+    Обновляет last_tax_ts до текущего времени. Возвращает суммарно собранную сумму.'''
     """
     total_collected = 0
     now = int(time.time())
@@ -1954,7 +1954,7 @@ def sl_buy_handler(bot, message):
         conn.execute("DELETE FROM slave_sales WHERE sale_id=?", (sale_id,))
         conn.commit()
     bot.send_message(message.chat.id, f"✅ {_display_name(buyer)} купил {_display_name(slave_id)} за {price} бублей у {_display_name(seller_id)}!")
-
+'''
 # === /osebe (о себе) including helpers & tokens & properties ===
 def osebe_handler(bot, message):
     register_user(message)
@@ -2355,7 +2355,7 @@ def register_extra_handlers(bot):
     def _h_shk_cb(call): shkatulka_callback_handler(bot, call)
 
     # sell/buy slaves
-    @bot.message_handler(commands=['sl_sell'])
+    '''@bot.message_handler(commands=['sl_sell'])
     def _h_sl_sell(m): sl_sell_handler(bot, m)
 
     @bot.message_handler(commands=['sl_buy'])
@@ -2378,7 +2378,7 @@ def register_extra_handlers(bot):
     def _h_topsl(m): topsl_handler(bot, m)
 
     @bot.message_handler(commands=['collect'])
-    def _h_collect(m): collect_handler(bot, m)
+    def _h_collect(m): collect_handler(bot, m)'''
 
     # bank
     @bot.message_handler(commands=['bbank'])
