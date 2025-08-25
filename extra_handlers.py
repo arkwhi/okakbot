@@ -228,9 +228,9 @@ def _update_balance(user_id: int, delta: int):
         conn.commit()
 
 # ===Hourly tax===
-'''def _apply_hourly_tax_for_owner(slave_id: int, owner_id: int):
+def _apply_hourly_tax_for_owner(slave_id: int, owner_id: int):
     """
-    #Снимает 30% баланса с раба и переводит его владельцу.
+    Снимает 30% баланса с раба и переводит его владельцу.
     """
     try:
         slave_balance = _get_balance(slave_id)
@@ -245,7 +245,7 @@ def _update_balance(user_id: int, delta: int):
 
         log.info(f"Slave tax: {slave_id} -> {owner_id}, amount={tax}")
     except Exception as e:
-        log.error(f"_apply_hourly_tax_for_owner error: {e}")'''
+        log.error(f"_apply_hourly_tax_for_owner error: {e}")
 # === Окак-Токены ===
 def _get_tokens(user_id: int) -> int:
     with db.get_connection() as conn:
@@ -1651,6 +1651,309 @@ def tre_callback_handler(bot, call):
             pass
 
 # --- Slave management helpers (вставить перед ensl_handler) ---
+def _is_slave(user_id):
+    """
+    Возвращает owner_id если user_id является рабом, иначе None.
+    """
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute("SELECT owner_id FROM slaves WHERE slave_id = ?", (user_id,)).fetchone()
+            return row[0] if row else None
+    except Exception as e:
+        log.exception(f"_is_slave error: {e}")
+        return None
+
+def _enslave(owner_id, slave_id):
+    """
+    Сделать slave_id рабом owner_id. Возвращает True при успешном порабощении, False иначе.
+    Не позволяет поработить самого себя или поработить уже порабощённого.
+    Устанавливает enslaved_at = now и last_tax_ts = now (чтобы не взимать налог сразу).
+    """
+    try:
+        if owner_id == slave_id:
+            return False
+        with db.get_connection() as conn:
+            # если уже есть хозяин — отказ
+            r = conn.execute("SELECT owner_id FROM slaves WHERE slave_id = ?", (slave_id,)).fetchone()
+            if r:
+                return False
+            ts = int(time.time())
+            conn.execute(
+                "INSERT INTO slaves (slave_id, owner_id, enslaved_at, last_tax_ts) VALUES (?, ?, ?, ?)",
+                (slave_id, owner_id, ts, ts)
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        log.exception(f"_enslave error: {e}")
+        return False
+
+def _release_slave(slave_id):
+    """
+    Освобождает раба (удаляет запись).
+    """
+    try:
+        with db.get_connection() as conn:
+            conn.execute("DELETE FROM slaves WHERE slave_id = ?", (slave_id,))
+            conn.commit()
+        return True
+    except Exception as e:
+        log.exception(f"_release_slave error: {e}")
+        return False
+
+def _get_slaves_of(owner_id):
+    """
+    Возвращает список кортежей (slave_id, enslaved_at, last_tax_ts) для данного владельца.
+    """
+    try:
+        with db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT slave_id, enslaved_at, last_tax_ts FROM slaves WHERE owner_id = ?",
+                (owner_id,)
+            ).fetchall()
+            return [(r[0], r[1], r[2]) for r in rows]
+    except Exception as e:
+        log.exception(f"_get_slaves_of error: {e}")
+        return []
+
+def _apply_hourly_tax_for_owner(owner_id):
+    """
+    Для каждого раба owner_id, если прошёл >= 1 часа с last_tax_ts,
+    снимает 30% от баланса раба и переводит владельцу.
+    Обновляет last_tax_ts до текущего времени. Возвращает суммарно собранную сумму.
+    """
+    total_collected = 0
+    now = int(time.time())
+    try:
+        with db.get_connection() as conn:
+            rows = conn.execute("SELECT slave_id, last_tax_ts FROM slaves WHERE owner_id = ?", (owner_id,)).fetchall()
+        for slave_id, last_ts in rows:
+            if last_ts is None:
+                last_ts = 0
+            # налог раз в час
+            if now - int(last_ts) < 3600:
+                continue
+            slave_bal = _get_balance(slave_id)
+            if slave_bal <= 0:
+                # просто обновим last_tax_ts, чтобы не пытаться снова
+                with db.get_connection() as conn:
+                    conn.execute("UPDATE slaves SET last_tax_ts = ? WHERE slave_id = ?", (now, slave_id))
+                    conn.commit()
+                continue
+            tax = int(math.floor(abs(slave_bal) * 0.30))
+            if tax <= 0:
+                with db.get_connection() as conn:
+                    conn.execute("UPDATE slaves SET last_tax_ts = ? WHERE slave_id = ?", (now, slave_id))
+                    conn.commit()
+                continue
+            # переводим: снимаем с раба, добавляем владельцу
+            _update_balance(slave_id, -tax)
+            _update_balance(owner_id, tax)
+            total_collected += tax
+            # обновляем метку времени
+            with db.get_connection() as conn:
+                conn.execute("UPDATE slaves SET last_tax_ts = ? WHERE slave_id = ?", (now, slave_id))
+                conn.commit()
+    except Exception as e:
+        log.exception(f"_apply_hourly_tax_for_owner error: {e}")
+    return total_collected
+# === Система рабства: /ensl, /sl, /desl, /escape, /sl_sell, /sl_buy, /topsl ===
+def ensl_handler(bot, message):
+    register_user(message)
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /ensl @user")
+        return
+    target_raw = parts[1]
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        with db.get_connection() as conn:
+            row = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
+            target_id = row[0] if row else None
+    if not target_id:
+        bot.reply_to(message, "❌ Цель не найдена.")
+        return
+    owner = message.from_user.id
+    if target_id == owner:
+        bot.reply_to(message, "❌ Нельзя поработить себя.")
+        return
+    if _is_slave(target_id):
+        bot.reply_to(message, "❌ У цели уже есть владелец.")
+        return
+    # шанс зависит от недвижимости (каждая уменьшает шанс на 10%)
+    base_chance = 0.5
+    props = _get_properties(target_id)
+    if 'hut' in props:
+        base_chance -= 0.10
+    if 'communal' in props:
+        base_chance -= 0.10
+    if 'country' in props:
+        base_chance -= 0.10
+    base_chance = max(0.05, base_chance)
+    if random.random() < base_chance:
+        _enslave(owner, target_id)
+        bot.reply_to(message, f"✅ {_display_name(target_id)} теперь твой раб.")
+    else:
+        bot.reply_to(message, "❌ Попытка поработить не удалась.")
+
+def sl_handler(bot, message):
+    register_user(message)
+    owner = message.from_user.id
+    rows = _get_slaves_of(owner)
+    if not rows:
+        bot.reply_to(message, "У вас нет рабов.")
+        return
+    lines = []
+    for slave_id, enslaved_at, last_tax in rows:
+        lines.append(f"{_display_name(slave_id)} (id {slave_id}) — раб с {time.ctime(enslaved_at)}")
+    bot.reply_to(message, "Ваши рабы:\n" + "\n".join(lines))
+
+def desl_handler(bot, message):
+    register_user(message)
+    parts = (message.text or "").split()
+    if len(parts) < 2 and not getattr(message, 'reply_to_message', None):
+        bot.reply_to(message, "❗ Формат: /desl @user или использовать команду в ответ на сообщение пользователя")
+        return
+    if getattr(message, 'reply_to_message', None) and message.reply_to_message.from_user:
+        target_id = message.reply_to_message.from_user.id
+    else:
+        target_raw = parts[1]
+        if target_raw.isdigit():
+            target_id = int(target_raw)
+        else:
+            with db.get_connection() as conn:
+                r = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
+                target_id = r[0] if r else None
+    if not target_id:
+        bot.reply_to(message, "❌ Пользователь не найден.")
+        return
+    owner = message.from_user.id
+    # проверить что target_id — раб именно этого owner
+    cur = _is_slave(target_id)
+    if not cur or cur != owner:
+        bot.reply_to(message, "❌ Этот пользователь не является вашим рабом.")
+        return
+    _release_slave(target_id)
+    bot.reply_to(message, f"✅ {_display_name(target_id)} освобождён.")
+
+def escape_handler(bot, message):
+    register_user(message)
+    uid = message.from_user.id
+    owner = _is_slave(uid)
+    if not owner:
+        bot.reply_to(message, "❗ Вы не являетесь рабом.")
+        return
+    # шанс побега 35% уменьшён на 15% если у owner есть guard helper
+    base = 0.35
+    owner_helpers = _get_helpers(owner)
+    if owner_helpers.get("guard", 0):
+        base -= 0.15
+    base = max(0.05, base)
+    if random.random() < base:
+        _release_slave(uid)
+        bot.reply_to(message, "✅ Ты убежал и теперь свободен.")
+    else:
+        bot.reply_to(message, "❌ Попытка побега не удалась.")
+
+def topsl_handler(bot, message):
+    with db.get_connection() as conn:
+        rows = conn.execute("SELECT owner_id, COUNT(*) as cnt FROM slaves GROUP BY owner_id ORDER BY cnt DESC LIMIT 10").fetchall()
+    if not rows:
+        bot.reply_to(message, "Пока нет рабовладельцев.")
+        return
+    lines = []
+    for i, (owner_id, cnt) in enumerate(rows, 1):
+        lines.append(f"{i}. {_display_name(owner_id)} — {cnt} раб(ов)")
+    bot.send_message(message.chat.id, "🏆 Топ рабовладельцев:\n" + "\n".join(lines))
+
+def collect_handler(bot, message):
+    # принудительный запуск налога/сбора для владельца
+    register_user(message)
+    owner = message.from_user.id
+    total = _apply_hourly_tax_for_owner(owner)
+    bot.reply_to(message, f"✅ Собрано с рабов: {total} бублей")
+
+# === Продажа раба: /sl_sell и /sl_buy ===
+def sl_sell_handler(bot, message):
+    register_user(message)
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /sl_sell <ник_раба_or_id>")
+        return
+    target_raw = parts[1]
+    if target_raw.isdigit():
+        slave_id = int(target_raw)
+    else:
+        with db.get_connection() as conn:
+            r = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
+            slave_id = r[0] if r else None
+    if not slave_id:
+        bot.reply_to(message, "❌ Раб не найден.")
+        return
+    seller = message.from_user.id
+    # проверка, что slave действительно ваш раб
+    cur_owner = _is_slave(slave_id)
+    if not cur_owner or cur_owner != seller:
+        bot.reply_to(message, "❌ Этот пользователь не является вашим рабом.")
+        return
+    # вычисляем цену: 4/5 * (0.7*баланс_раба + 0.4*баланс_владельца)
+    slave_bal = _get_balance(slave_id)
+    seller_bal = _get_balance(seller)
+    price = int(math.floor( (0.7 * slave_bal + 0.4 * seller_bal) * 4.0 / 5.0 ))
+    if price <= 0:
+        bot.reply_to(message, "❌ Цена получилась нулевой — продажа невозможна.")
+        return
+    now = int(time.time())
+    with db.get_connection() as conn:
+        r = conn.execute("INSERT INTO slave_sales (slave_id, seller_id, price, created_at) VALUES (?, ?, ?, ?)",
+                         (slave_id, seller, price, now))
+        conn.commit()
+        sale_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    bot.send_message(message.chat.id, f"🔖 Продажа раба выставлена: {_display_name(slave_id)} (id {slave_id})\nЦена: {price} бублей\nЧтобы купить — напишите: /sl_buy {sale_id}\nПервый, кто напишет /sl_buy {sale_id}, купит раба (проверьте баланс).")
+
+def sl_buy_handler(bot, message):
+    register_user(message)
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /sl_buy <sale_id>")
+        return
+    sale_id_raw = parts[1]
+    if not sale_id_raw.isdigit():
+        bot.reply_to(message, "❗ sale_id должен быть числом")
+        return
+    sale_id = int(sale_id_raw)
+    buyer = message.from_user.id
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT slave_id, seller_id, price FROM slave_sales WHERE sale_id=?", (sale_id,)).fetchone()
+        if not row:
+            bot.reply_to(message, "❌ Продажа не найдена или уже завершена.")
+            return
+        slave_id, seller_id, price = row
+        # проверка - slave должен быть все ещё рабом seller_id
+        cur_owner = _is_slave(slave_id)
+        if not cur_owner or cur_owner != seller_id:
+            bot.reply_to(message, "❌ Этот раб больше не принадлежит продавцу. Операция отменена.")
+            # удаляем запись на всякий случай
+            conn.execute("DELETE FROM slave_sales WHERE sale_id=?", (sale_id,))
+            conn.commit()
+            return
+        if buyer == seller_id:
+            bot.reply_to(message, "❌ Нельзя купить своего раба.")
+            return
+        bal = _get_balance(buyer)
+        if bal < price:
+            bot.reply_to(message, "❌ У вас недостаточно средств для покупки.")
+            return
+        # перевод денег
+        _update_balance(buyer, -price)
+        _update_balance(seller_id, price)
+        # смена владельца
+        _enslave(buyer, slave_id)
+        # удаляем заявку
+        conn.execute("DELETE FROM slave_sales WHERE sale_id=?", (sale_id,))
+        conn.commit()
+    bot.send_message(message.chat.id, f"✅ {_display_name(buyer)} купил {_display_name(slave_id)} за {price} бублей у {_display_name(seller_id)}!")
 
 # === /osebe (о себе) including helpers & tokens & properties ===
 def osebe_handler(bot, message):
@@ -2052,7 +2355,7 @@ def register_extra_handlers(bot):
     def _h_shk_cb(call): shkatulka_callback_handler(bot, call)
 
     # sell/buy slaves
-    '''@bot.message_handler(commands=['sl_sell'])
+    @bot.message_handler(commands=['sl_sell'])
     def _h_sl_sell(m): sl_sell_handler(bot, m)
 
     @bot.message_handler(commands=['sl_buy'])
@@ -2075,7 +2378,7 @@ def register_extra_handlers(bot):
     def _h_topsl(m): topsl_handler(bot, m)
 
     @bot.message_handler(commands=['collect'])
-    def _h_collect(m): collect_handler(bot, m)'''
+    def _h_collect(m): collect_handler(bot, m)
 
     # bank
     @bot.message_handler(commands=['bbank'])
