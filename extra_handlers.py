@@ -1716,12 +1716,10 @@ def _get_slaves_of(owner_id):
         log.exception(f"_get_slaves_of error: {e}")
         return []
 
-def _apply_hourly_tax_for_owner(owner_id):
-    """
-  '''  Для каждого раба owner_id, если прошёл >= 1 часа с last_tax_ts,
+def _apply_hourly_tax_for_owner(owner_id): ''''Для каждого раба owner_id, если прошёл >= 1 часа с last_tax_ts,
     снимает 30% от баланса раба и переводит владельцу.
-    Обновляет last_tax_ts до текущего времени. Возвращает суммарно собранную сумму.'''
-    """
+    Обновляет last_tax_ts до текущего времени. Возвращает суммарно собранную сумму.
+    ''''''
     total_collected = 0
     now = int(time.time())
     try:
