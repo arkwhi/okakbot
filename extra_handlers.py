@@ -1665,9 +1665,9 @@ def tre_callback_handler(bot, call):
 
 def _enslave(owner_id, slave_id):
     """
-   ''' Сделать slave_id рабом owner_id. Возвращает True при успешном порабощении, False иначе.
-    Не позволяет поработить самого себя или поработить уже порабощённого.
-    Устанавливает enslaved_at = now и last_tax_ts = now (чтобы не взимать налог сразу).'''
+   # Сделать slave_id рабом owner_id. Возвращает True при успешном порабощении, False иначе.
+    #Не позволяет поработить самого себя или поработить уже порабощённого.
+    #Устанавливает enslaved_at = now и last_tax_ts = now (чтобы не взимать налог сразу).'''
     """
     try:
         if owner_id == slave_id:
