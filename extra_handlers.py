@@ -66,10 +66,10 @@ PROPERTIES = {
     },
     "mansion": {  # новая недвижимость: Роскошный особняк
         "name": "Роскошный особняк",
-        "price": 95_000_000,
+        "price": 95000000,
         "command": "youtuber",
         "cooldown": 600,  # 10 минут
-        "income": (80_000, 230_000),
+        "income": (80000, 230000),
         "message": "🫩После дня кучи коллабораций и монтажа, выручка с реклам и донатов на бусти вышла: {money} бублей.\nБаланс: {balance} бублей."
     }
 }
@@ -77,6 +77,7 @@ PROPERTIES = {
 # === Инициализация таблиц (при первом импорте) ===
 def _ensure_tables():
     with db.get_connection() as conn:
+            
         conn.execute("""
             CREATE TABLE IF NOT EXISTS balances (
                 user_id INTEGER PRIMARY KEY,
@@ -122,25 +123,7 @@ def _ensure_tables():
                 balance INTEGER NOT NULL
             )
         """)
-        # Таблица для рабства
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS slaves (
-                slave_id INTEGER PRIMARY KEY,
-                owner_id INTEGER NOT NULL,
-                enslaved_at INTEGER NOT NULL,
-                last_tax_ts INTEGER NOT NULL
-            )
-        """)
-        # Таблица продаж рабов
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS slave_sales (
-                sale_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                slave_id INTEGER NOT NULL,
-                seller_id INTEGER NOT NULL,
-                price INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-            )
-        """)
+        
         # Таблица помощников / окaк токенов / банк
         conn.execute("""
             CREATE TABLE IF NOT EXISTS okak_tokens (
@@ -166,6 +149,54 @@ def _ensure_tables():
                 earned_from_invest INTEGER DEFAULT 0
             )
         """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS psych (
+            user_id INTEGER PRIMARY KEY,
+            stage INTEGER DEFAULT 7,       -- 7..0 (7 стартовая)
+            last_upgrade_ts INTEGER DEFAULT 0
+        )
+    """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS clans (
+            clan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            don_id INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            wins INTEGER DEFAULT 0,
+            last_war_ts INTEGER DEFAULT 0
+        )
+    """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS clan_members (
+            clan_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role TEXT NOT NULL DEFAULT 'member', -- donor roles: don / capo / member
+            joined_at INTEGER NOT NULL,
+            last_promote_ts INTEGER DEFAULT 0,
+            UNIQUE(clan_id, user_id)
+        )
+    """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS clan_goods (
+            clan_id INTEGER PRIMARY KEY,
+            goods INTEGER DEFAULT 0
+        )
+    """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS clan_bans (
+            clan_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            banned_at INTEGER NOT NULL,
+            PRIMARY KEY (clan_id, user_id)
+        )
+    """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS clan_stats (
+            clan_id INTEGER PRIMARY KEY,
+            wars_won INTEGER DEFAULT 0
+        )
+    """)
         # индекс для ников (case-insensitive)
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_nick_unique ON nicknames (nickname COLLATE NOCASE)")
         conn.commit()
@@ -178,7 +209,7 @@ def _ensure_treasure_table():
         with db.get_connection() as conn:
             row = conn.execute("SELECT balance FROM treasure WHERE id = 1").fetchone()
             if not row:
-                conn.execute("INSERT INTO treasure (id, balance) VALUES (1, ?)", (100000,))
+                conn.execute("INSERT INTO treasure (id, balance) VALUES (1, ?)", (10000000,))
             conn.commit()
     except Exception as e:
         log.error(f"_ensure_treasure_table error: {e}")
@@ -227,25 +258,6 @@ def _update_balance(user_id: int, delta: int):
         )
         conn.commit()
 
-# ===Hourly tax===
-def _apply_hourly_tax_for_owner(slave_id: int, owner_id: int):
-    """
-    Снимает 30% баланса с раба и переводит его владельцу.
-    """
-    try:
-        slave_balance = _get_balance(slave_id)
-        if slave_balance <= 0:
-            return  # нечего забирать
-        tax = int(slave_balance * 0.3)
-
-        # снять с раба
-        _update_balance(slave_id, -tax)
-        # выдать владельцу
-        _update_balance(owner_id, tax)
-
-        log.info(f"Slave tax: {slave_id} -> {owner_id}, amount={tax}")
-    except Exception as e:
-        log.error(f"_apply_hourly_tax_for_owner error: {e}")
 # === Окак-Токены ===
 def _get_tokens(user_id: int) -> int:
     with db.get_connection() as conn:
@@ -577,6 +589,108 @@ def nickname_handler(bot, message):
     _set_nickname(message.from_user.id, nick)
     bot.reply_to(message, f"✅ Теперь твой ник: {nick}")
 
+
+# --- PSYCH helpers ---
+PSYCH_STAGES = {
+    7: "Глубокая депрессия",
+    6: "Депрессия",
+    5: "Тоска",
+    4: "Упадок",
+    3: "Грусть",
+    2: "Обычное состояние",
+    1: "Стабильность",
+    0: "Счастье"
+}
+PSYCH_COOLDOWN = 15 * 60  # 15 минут в секундах
+
+def _get_psych(user_id: int) -> dict:
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT stage, last_upgrade_ts FROM psych WHERE user_id=?", (user_id,)).fetchone()
+        if not row:
+            conn.execute("INSERT INTO psych (user_id, stage, last_upgrade_ts) VALUES (?, ?, ?)", (user_id, 7, 0))
+            conn.commit()
+            return {"stage": 7, "last_upgrade_ts": 0}
+        return {"stage": row[0], "last_upgrade_ts": row[1]}
+
+def _set_psych(user_id: int, stage: int, ts: int=None):
+    ts = int(time.time()) if ts is None else int(ts)
+    with db.get_connection() as conn:
+        conn.execute("INSERT INTO psych (user_id, stage, last_upgrade_ts) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET stage=excluded.stage, last_upgrade_ts=excluded.last_upgrade_ts", (user_id, stage, ts))
+        conn.commit()
+
+def _psych_upgrade_cost(stage_from: int):
+    """
+    Стоимость перехода со stage_from -> stage_from-1.
+    Базовая цена 3_000, умножается на 3 на каждой ступени вверх (т.е. чем ближе к 0 — дороже).
+    Но для stage 1 (Стабильность) — цена 2 Окак-токена, для stage 0 (Счастье) — 5 Окак-токенов.
+    Возвращает tuple (is_token_cost:bool, amount:int)
+    """
+    if stage_from <= 1:
+        # если уже 1 -> переход на 0: special token cost
+        if stage_from == 1:
+            return (True, 2)  # 2 токена на переход 1->0
+        return (True, 5)      # если вдруг 0->? (нереально), оставить
+    # обычные бубли
+    base = 3000
+    # сколько раз умножать: (7 - stage_from) ? но логичнее: cost grows, 
+    # для простоты: cost = base * (3 ** (7 - stage_from))
+    exponent = max(0, 7 - stage_from)
+    amount = int(base * (3 ** exponent))
+    return (False, amount)
+
+def _can_upgrade_psych(user_id: int):
+    data = _get_psych(user_id)
+    now = int(time.time())
+    return now - data["last_upgrade_ts"] >= PSYCH_COOLDOWN
+
+# --- CLAN helpers ---
+def _count_clans_in_chat(chat_id: int) -> int:
+    with db.get_connection() as conn:
+        return conn.execute("SELECT COUNT(*) FROM clans WHERE chat_id=?", (chat_id,)).fetchone()[0] or 0
+
+def _get_clan_by_name(chat_id: int, name: str):
+    with db.get_connection() as conn:
+        return conn.execute("SELECT clan_id, name, don_id, created_at FROM clans WHERE chat_id=? AND LOWER(name)=LOWER(?)", (chat_id, name)).fetchone()
+
+def _get_member_role(clan_id: int, user_id: int):
+    with db.get_connection() as conn:
+        r = conn.execute("SELECT role FROM clan_members WHERE clan_id=? AND user_id=?", (clan_id, user_id)).fetchone()
+        return r[0] if r else None
+
+def _add_member(clan_id: int, user_id: int, role="member"):
+    ts = int(time.time())
+    with db.get_connection() as conn:
+        conn.execute("INSERT OR IGNORE INTO clan_members (clan_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)", (clan_id, user_id, role, ts))
+        conn.commit()
+
+def _remove_member(clan_id: int, user_id: int):
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM clan_members WHERE clan_id=? AND user_id=?", (clan_id, user_id))
+        conn.commit()
+
+def _clan_goods_get(clan_id: int) -> int:
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT goods FROM clan_goods WHERE clan_id=?", (clan_id,)).fetchone()
+        return row[0] if row else 0
+
+def _clan_goods_add(clan_id: int, amount: int):
+    with db.get_connection() as conn:
+        conn.execute("INSERT INTO clan_goods (clan_id, goods) VALUES (?, ?) ON CONFLICT(clan_id) DO UPDATE SET goods = goods + excluded.goods", (clan_id, amount))
+        conn.commit()
+
+def _clan_goods_subtract(clan_id: int, amount: int):
+    with db.get_connection() as conn:
+        cur = _clan_goods_get(clan_id)
+        newv = max(0, cur - amount)
+        conn.execute("INSERT INTO clan_goods (clan_id, goods) VALUES (?, ?) ON CONFLICT(clan_id) DO UPDATE SET goods = ?", (clan_id, newv, newv))
+        conn.commit()
+
+def _is_banned_from_clan(clan_id:int, user_id:int) -> bool:
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT 1 FROM clan_bans WHERE clan_id=? AND user_id=?", (clan_id,user_id)).fetchone()
+        return bool(row)
+        
+        
 # === Wipe / delete nick handlers (admin) ===
 def _find_user_id_by_username_fallback(username_no_at: str):
     try:
@@ -884,7 +998,7 @@ def luck_callback_handler(bot, call):
             pass
 
 # === /chests ===
-CHEST_COOLDOWN = 180  # 3 минуты
+CHEST_COOLDOWN = 30  # 30sec
 _last_chests = {}
 
 SQUARES = ["🟥", "🟦", "🟩", "🟨", "🟪", "⬜️", "🟫", "⬛️"]
@@ -1651,310 +1765,924 @@ def tre_callback_handler(bot, call):
             pass
 
 # --- Slave management helpers (вставить перед ensl_handler) ---
-def _is_slave(user_id):
-    """
-    Возвращает owner_id если user_id является рабом, иначе None.
-    """
-    try:
-        with db.get_connection() as conn:
-            row = conn.execute("SELECT owner_id FROM slaves WHERE slave_id = ?", (user_id,)).fetchone()
-            return row[0] if row else None
-    except Exception as e:
-        log.exception(f"_is_slave error: {e}")
-        return None
-
-def _enslave(owner_id, slave_id):
-    """
-    Сделать slave_id рабом owner_id. Возвращает True при успешном порабощении, False иначе.
-    Не позволяет поработить самого себя или поработить уже порабощённого.
-    Устанавливает enslaved_at = now и last_tax_ts = now (чтобы не взимать налог сразу).
-    """
-    try:
-        if owner_id == slave_id:
-            return False
-        with db.get_connection() as conn:
-            # если уже есть хозяин — отказ
-            r = conn.execute("SELECT owner_id FROM slaves WHERE slave_id = ?", (slave_id,)).fetchone()
-            if r:
-                return False
-            ts = int(time.time())
-            conn.execute(
-                "INSERT INTO slaves (slave_id, owner_id, enslaved_at, last_tax_ts) VALUES (?, ?, ?, ?)",
-                (slave_id, owner_id, ts, ts)
-            )
-            conn.commit()
-        return True
-    except Exception as e:
-        log.exception(f"_enslave error: {e}")
-        return False
-
-def _release_slave(slave_id):
-    """
-    Освобождает раба (удаляет запись).
-    """
-    try:
-        with db.get_connection() as conn:
-            conn.execute("DELETE FROM slaves WHERE slave_id = ?", (slave_id,))
-            conn.commit()
-        return True
-    except Exception as e:
-        log.exception(f"_release_slave error: {e}")
-        return False
-
-def _get_slaves_of(owner_id):
-    """
-    Возвращает список кортежей (slave_id, enslaved_at, last_tax_ts) для данного владельца.
-    """
-    try:
-        with db.get_connection() as conn:
-            rows = conn.execute(
-                "SELECT slave_id, enslaved_at, last_tax_ts FROM slaves WHERE owner_id = ?",
-                (owner_id,)
-            ).fetchall()
-            return [(r[0], r[1], r[2]) for r in rows]
-    except Exception as e:
-        log.exception(f"_get_slaves_of error: {e}")
-        return []
-
-def _apply_hourly_tax_for_owner(owner_id):
-    """
-    Для каждого раба owner_id, если прошёл >= 1 часа с last_tax_ts,
-    снимает 30% от баланса раба и переводит владельцу.
-    Обновляет last_tax_ts до текущего времени. Возвращает суммарно собранную сумму.
-    """
-    total_collected = 0
+# ---------------- PSYCH handlers ----------------
+def psychs_handler(bot, message):
+    register_user(message)
+    uid = message.from_user.id
+    data = _get_psych(uid)
+    stage = data["stage"]
+    next_stage = max(0, stage - 1)
     now = int(time.time())
+    can_upgrade = _can_upgrade_psych(uid)
+    token_cost_or_bubl = _psych_upgrade_cost(stage)
+    if token_cost_or_bubl[0]:
+        cost_descr = f"{token_cost_or_bubl[1]} Окак-Токенов"
+    else:
+        cost_descr = f"{token_cost_or_bubl[1]} бублей"
+    text = (
+        f"🧠 Текущее состояние: {PSYCH_STAGES.get(stage, str(stage))} (уровень {stage})\n"
+        f"Следующее состояние: {PSYCH_STAGES.get(next_stage, str(next_stage))} (уровень {next_stage})\n\n"
+        f"Цена перехода: {cost_descr}\n"
+        f"Кулдаун между походами: {int(PSYCH_COOLDOWN/60)} минут\n"
+    )
+    markup = types.InlineKeyboardMarkup()
+    btn_text = "Пойти к психологу" if can_upgrade else "Пойти к психологу (еще не готов)"
+    markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"psych_upgrade_{uid}"))
+    bot.send_message(message.chat.id, text, reply_markup=markup)
+
+def psych_callback_handler(bot, call):
     try:
-        with db.get_connection() as conn:
-            rows = conn.execute("SELECT slave_id, last_tax_ts FROM slaves WHERE owner_id = ?", (owner_id,)).fetchall()
-        for slave_id, last_ts in rows:
-            if last_ts is None:
-                last_ts = 0
-            # налог раз в час
-            if now - int(last_ts) < 3600:
-                continue
-            slave_bal = _get_balance(slave_id)
-            if slave_bal <= 0:
-                # просто обновим last_tax_ts, чтобы не пытаться снова
-                with db.get_connection() as conn:
-                    conn.execute("UPDATE slaves SET last_tax_ts = ? WHERE slave_id = ?", (now, slave_id))
-                    conn.commit()
-                continue
-            tax = int(math.floor(abs(slave_bal) * 0.30))
-            if tax <= 0:
-                with db.get_connection() as conn:
-                    conn.execute("UPDATE slaves SET last_tax_ts = ? WHERE slave_id = ?", (now, slave_id))
-                    conn.commit()
-                continue
-            # переводим: снимаем с раба, добавляем владельцу
-            _update_balance(slave_id, -tax)
-            _update_balance(owner_id, tax)
-            total_collected += tax
-            # обновляем метку времени
-            with db.get_connection() as conn:
-                conn.execute("UPDATE slaves SET last_tax_ts = ? WHERE slave_id = ?", (now, slave_id))
-                conn.commit()
+        parts = call.data.split("_")
+        if parts[0] != "psych" or parts[1] != "upgrade":
+            return
+        uid = int(parts[2])
+        if call.from_user.id != uid:
+            bot.answer_callback_query(call.id, "❌ Эта кнопка не для вас", show_alert=True)
+            return
+        # start process
+        data = _get_psych(uid)
+        stage = data["stage"]
+        if stage <= 0:
+            bot.answer_callback_query(call.id, "ℹ️ У вас уже максимальное состояние (Счастье).", show_alert=True)
+            return
+        if not _can_upgrade_psych(uid):
+            bot.answer_callback_query(call.id, "⏳ Кулдаун ещё не прошёл", show_alert=True)
+            return
+        is_token_cost, cost = _psych_upgrade_cost(stage)
+        if is_token_cost:
+            # требуются токены
+            tokens = _get_tokens(uid)
+            if tokens < cost:
+                bot.answer_callback_query(call.id, f"❌ Нужно {cost} Окак-Токенов. У вас: {tokens}", show_alert=True)
+                return
+            _update_tokens(uid, -cost)
+        else:
+            bal = _get_balance(uid)
+            if bal < cost:
+                bot.answer_callback_query(call.id, f"❌ Нужно {cost} бублей. Баланс: {bal}", show_alert=True)
+                return
+            _update_balance(uid, -cost)
+            # при расходе бублей ничего дополнительно
+        # апгрейд
+        new_stage = stage - 1
+        _set_psych(uid, new_stage)
+        bot.answer_callback_query(call.id, f"✅ Вы улучшили состояние: {PSYCH_STAGES.get(new_stage)}", show_alert=True)
     except Exception as e:
-        log.exception(f"_apply_hourly_tax_for_owner error: {e}")
-    return total_collected
-# === Система рабства: /ensl, /sl, /desl, /escape, /sl_sell, /sl_buy, /topsl ===
-def ensl_handler(bot, message):
+        log.exception(f"psych_callback_handler error: {e}")
+        try: bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
+        except: pass
+
+
+# ---------------- CLAN handlers ----------------
+def clan_create_handler(bot, message):
+    register_user(message)
+    uid = message.from_user.id
+    # только игроки с состоянием "Обычное состояние" (stage == 2)
+    psych = _get_psych(uid)
+    if psych["stage"] != 2:
+        bot.reply_to(message, "❌ Создавать клан может только игрок в состоянии 'Обычное состояние'.")
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /clan_create <название> (макс 30 символов, только одна раскладка)")
+        return
+    name = parts[1].strip()
+    if len(name) > 30:
+        bot.reply_to(message, "❗ Название слишком длинное (макс 30 символов).")
+        return
+    # проверка раскладки: все русские или все латинские
+    def _is_all_ru(s):
+        return all('а' <= c <= 'я' or 'А' <= c <= 'Я' or c == 'ё' or c == 'Ё' or not c.isalpha() for c in s)
+    def _is_all_en(s):
+        return all('a' <= c.lower() <= 'z' or not c.isalpha() for c in s)
+    if not (_is_all_ru(name) or _is_all_en(name)):
+        bot.reply_to(message, "❗ Название должно состоять только из русских или только из латинских букв (без смешения).")
+        return
+    chat_id = message.chat.id
+    if _count_clans_in_chat(chat_id) >= 4:
+        bot.reply_to(message, "❌ В этом чате уже 4 клана — больше нельзя создать.")
+        return
+    now = int(time.time())
+    with db.get_connection() as conn:
+        conn.execute("INSERT INTO clans (chat_id, name, don_id, created_at) VALUES (?, ?, ?, ?)", (chat_id, name, uid, now))
+        clan_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute("INSERT INTO clan_members (clan_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)", (clan_id, uid, "don", now))
+        conn.execute("INSERT OR IGNORE INTO clan_goods (clan_id, goods) VALUES (?, ?)", (clan_id, 0))
+        conn.commit()
+    bot.reply_to(message, f"✅ Клан '{name}' создан. Ты — Дон.")
+
+def clan_join_handler(bot, message):
+    register_user(message)
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /clan_join <название>")
+        return
+    name = parts[1].strip()
+    chat_id = message.chat.id
+    clan = _get_clan_by_name(chat_id, name)
+    if not clan:
+        bot.reply_to(message, "❌ Клан не найден.")
+        return
+    clan_id = clan[0]
+    uid = message.from_user.id
+    # требование: в него как минимум Упадок (stage >=4)
+    psych = _get_psych(uid)
+    if psych["stage"] >= 4:
+        bot.reply_to(message, "❌ Вступать можно только если у тебя состояние лучше или равно 'Упадок' (слабаков не берут).")
+        return
+    # провека бана
+    if _is_banned_from_clan(clan_id, uid):
+        bot.reply_to(message, "❌ Ты забанен в этом клане.")
+        return
+    _add_member(clan_id, uid, "member")
+    bot.reply_to(message, f"✅ Ты вступил в клан '{clan[1]}'.")
+
+def clan_kick_handler(bot, message):
+    # формат: /clan_kick @user (только Дон)
     register_user(message)
     parts = (message.text or "").split()
     if len(parts) < 2:
-        bot.reply_to(message, "❗ Формат: /ensl @user")
+        bot.reply_to(message, "❗ Формат: /clan_kick @user")
         return
     target_raw = parts[1]
+    chat_id = message.chat.id
+    uid = message.from_user.id
+    # найдем клан, где юзер дон
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT clan_id, name FROM clans WHERE chat_id=? AND don_id=?", (chat_id, uid)).fetchone()
+    if not row:
+        bot.reply_to(message, "❌ Ты не Дон ни одного клана в этом чате.")
+        return
+    clan_id, cname = row
+    # find target id
     if target_raw.isdigit():
         target_id = int(target_raw)
     else:
         with db.get_connection() as conn:
-            row = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
-            target_id = row[0] if row else None
+            r = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
+            target_id = r[0] if r else None
     if not target_id:
-        bot.reply_to(message, "❌ Цель не найдена.")
+        bot.reply_to(message, "❌ Пользователь не найден.")
         return
-    owner = message.from_user.id
-    if target_id == owner:
-        bot.reply_to(message, "❌ Нельзя поработить себя.")
-        return
-    if _is_slave(target_id):
-        bot.reply_to(message, "❌ У цели уже есть владелец.")
-        return
-    # шанс зависит от недвижимости (каждая уменьшает шанс на 10%)
-    base_chance = 0.5
-    props = _get_properties(target_id)
-    if 'hut' in props:
-        base_chance -= 0.10
-    if 'communal' in props:
-        base_chance -= 0.10
-    if 'country' in props:
-        base_chance -= 0.10
-    base_chance = max(0.05, base_chance)
-    if random.random() < base_chance:
-        _enslave(owner, target_id)
-        bot.reply_to(message, f"✅ {_display_name(target_id)} теперь твой раб.")
-    else:
-        bot.reply_to(message, "❌ Попытка поработить не удалась.")
+    # confirm via button
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("Подтвердить", callback_data=f"clan_kick_confirm_{clan_id}_{target_id}_{uid}"),
+        types.InlineKeyboardButton("Отмена", callback_data=f"clan_kick_cancel_{clan_id}_{target_id}_{uid}")
+    )
+    bot.send_message(chat_id, f"⚠️ Дон {_display_name(uid)} предлагает исключить {_display_name(target_id)} из клана '{cname}'. Подтверждаете?", reply_markup=markup)
 
-def sl_handler(bot, message):
-    register_user(message)
-    owner = message.from_user.id
-    rows = _get_slaves_of(owner)
-    if not rows:
-        bot.reply_to(message, "У вас нет рабов.")
-        return
-    lines = []
-    for slave_id, enslaved_at, last_tax in rows:
-        lines.append(f"{_display_name(slave_id)} (id {slave_id}) — раб с {time.ctime(enslaved_at)}")
-    bot.reply_to(message, "Ваши рабы:\n" + "\n".join(lines))
+def clan_kick_callback(bot, call):
+    try:
+        parts = call.data.split("_")
+        if parts[0] != "clan" or parts[1] not in ("kick",):
+            return
+        action = parts[1]
+        sub = parts[2]  # confirm/cancel
+        clan_id = int(parts[3])
+        target_id = int(parts[4])
+        initiator = int(parts[5])
+        # only initiator or owner can press
+        if call.from_user.id != initiator:
+            bot.answer_callback_query(call.id, "❌ Только инициатор может нажать", show_alert=True)
+            return
+        if sub == "confirm":
+            _remove_member(clan_id, target_id)
+            bot.send_message(call.message.chat.id, f"✅ {_display_name(target_id)} исключён из клана.")
+        else:
+            bot.send_message(call.message.chat.id, "ℹ️ Операция отменена.")
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except:
+            pass
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        log.exception(f"clan_kick_callback err: {e}")
+        try: bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
+        except: pass
 
-def desl_handler(bot, message):
+def clan_ban_handler(bot, message):
+    # /clan_ban @user  (аналогично kick, но в таблице ban)
     register_user(message)
     parts = (message.text or "").split()
-    if len(parts) < 2 and not getattr(message, 'reply_to_message', None):
-        bot.reply_to(message, "❗ Формат: /desl @user или использовать команду в ответ на сообщение пользователя")
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /clan_ban @user")
         return
-    if getattr(message, 'reply_to_message', None) and message.reply_to_message.from_user:
-        target_id = message.reply_to_message.from_user.id
+    target_raw = parts[1]
+    chat_id = message.chat.id
+    uid = message.from_user.id
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT clan_id, name FROM clans WHERE chat_id=? AND don_id=?", (chat_id, uid)).fetchone()
+    if not row:
+        bot.reply_to(message, "❌ Ты не Дон клана.")
+        return
+    clan_id, cname = row
+    if target_raw.isdigit():
+        target_id = int(target_raw)
     else:
+        with db.get_connection() as conn:
+            r = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
+            target_id = r[0] if r else None
+    if not target_id:
+        bot.reply_to(message, "❌ Пользователь не найден.")
+        return
+    with db.get_connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO clan_bans (clan_id, user_id, banned_at) VALUES (?, ?, ?)", (clan_id, target_id, int(time.time())))
+        conn.commit()
+    _remove_member(clan_id, target_id)
+    bot.reply_to(message, f"✅ {_display_name(target_id)} забанен в клане '{cname}'.")
+
+def clan_unban_handler(bot, message):
+    # /clan_unban @user
+    register_user(message)
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /clan_unban @user")
+        return
+    target_raw = parts[1]
+    chat_id = message.chat.id
+    uid = message.from_user.id
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT clan_id FROM clans WHERE chat_id=? AND don_id=?", (chat_id, uid)).fetchone()
+    if not row:
+        bot.reply_to(message, "❌ Ты не Дон клана.")
+        return
+    clan_id = row[0]
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        with db.get_connection() as conn:
+            r = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
+            target_id = r[0] if r else None
+    if not target_id:
+        bot.reply_to(message, "❌ Пользователь не найден.")
+        return
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM clan_bans WHERE clan_id=? AND user_id=?", (clan_id, target_id))
+        conn.commit()
+    bot.reply_to(message, f"✅ {_display_name(target_id)} разбанен.")
+
+def clans_handler(bot, message):
+    chat_id = message.chat.id
+    with db.get_connection() as conn:
+        rows = conn.execute("SELECT clan_id, name, don_id FROM clans WHERE chat_id=?", (chat_id,)).fetchall()
+    if not rows:
+        bot.reply_to(message, "ℹ️ В этом чате нет кланов.")
+        return
+    lines = []
+    with db.get_connection() as conn:
+        for clan_id, name, don_id in rows:
+            count = conn.execute("SELECT COUNT(*) FROM clan_members WHERE clan_id=?", (clan_id,)).fetchone()[0] or 0
+            total_money = 0
+            # сумма балансов участников
+            members = conn.execute("SELECT user_id FROM clan_members WHERE clan_id=?", (clan_id,)).fetchall()
+            for (muid,) in members:
+                total_money += _get_balance(muid)
+            lines.append(f"{name} — участников: {count}, дон: {_display_name(don_id)}, сумма бублей участников: {total_money}")
+    bot.send_message(message.chat.id, "📜 Список кланов:\n\n" + "\n".join(lines))
+
+def clan_grind_handler(bot, message):
+    register_user(message)
+    uid = message.from_user.id
+    chat_id = message.chat.id
+    # find clan where user is member
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT clan_id FROM clan_members WHERE user_id=?", (uid,)).fetchone()
+    if not row:
+        bot.reply_to(message, "❗ Ты не состоишь в клане.")
+        return
+    clan_id = row[0]
+    # cooldown per-user 40 sec — используем simple memory dict
+    if not hasattr(clan_grind_handler, "_last_grind"): clan_grind_handler._last_grind = {}
+    now = time.time()
+    last = clan_grind_handler._last_grind.get(uid, 0)
+    if now - last < 40:
+        bot.reply_to(message, f"⏳ Подожди {int(40 - (now - last))} сек.")
+        return
+    clan_grind_handler._last_grind[uid] = now
+    gained = random.randint(2,5)
+    _clan_goods_add(clan_id, gained)
+    bot.reply_to(message, f"📦 Ты принёс {gained} товар(ов) в склад клана. Текущий склад: {_clan_goods_get(clan_id)}")
+
+def clan_up_handler(bot, message):
+    # /clan_up @user — Дон повышает до Капо. Кулдаун 36 часов на повышение для Дона
+    register_user(message)
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /clan_up @user")
+        return
+    target_raw = parts[1]
+    chat_id = message.chat.id
+    caller = message.from_user.id
+    with db.get_connection() as conn:
+        clan = conn.execute("SELECT clan_id FROM clans WHERE chat_id=? AND don_id=?", (chat_id, caller)).fetchone()
+    if not clan:
+        bot.reply_to(message, "❌ Ты не Дон.")
+        return
+    clan_id = clan[0]
+    # find target id
+    if target_raw.isdigit():
+        target_id = int(target_raw)
+    else:
+        with db.get_connection() as conn:
+            r = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
+            target_id = r[0] if r else None
+    if not target_id:
+        bot.reply_to(message, "❌ Пользователь не найден.")
+        return
+    # find last promote time for this clan donor: stored in clan_members.last_promote_ts for donor
+    with db.get_connection() as conn:
+        donor_row = conn.execute("SELECT last_promote_ts FROM clan_members WHERE clan_id=? AND user_id=?", (clan_id, caller)).fetchone()
+        last_promote = donor_row[0] if donor_row else 0
+    if time.time() - last_promote < 36*3600:
+        bot.reply_to(message, "⏳ Ты недавно повышал — подожди.")
+        return
+    # promote
+    with db.get_connection() as conn:
+        conn.execute("UPDATE clan_members SET role='capo', last_promote_ts=? WHERE clan_id=? AND user_id=?", (int(time.time()), clan_id, target_id))
+        # update donor last_promote_ts
+        conn.execute("UPDATE clan_members SET last_promote_ts=? WHERE clan_id=? AND user_id=?", (int(time.time()), clan_id, caller))
+        conn.commit()
+    bot.reply_to(message, f"✅ {_display_name(target_id)} повышен до Капо в клане.")
+
+def clan_war_handler(bot, message):
+    # /clan_war <clan_name> — only Don
+    register_user(message)
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /clan_war <название>")
+        return
+    target_name = parts[1].strip()
+    chat_id = message.chat.id
+    caller = message.from_user.id
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT clan_id, name, created_at, last_war_ts FROM clans WHERE chat_id=? AND don_id=?", (chat_id, caller)).fetchone()
+    if not row:
+        bot.reply_to(message, "❌ Ты не Дон.")
+        return
+    clan_id, name, created_at, last_war_ts = row
+    # check target clan
+    target = _get_clan_by_name(chat_id, target_name)
+    if not target:
+        bot.reply_to(message, "❌ Клан-цель не найден.")
+        return
+    target_id = target[0]
+    # can't war itself
+    if target_id == clan_id:
+        bot.reply_to(message, "❌ Нельзя объявить войну самому себе.")
+        return
+    # cannot declare war within 2 hours of creating clan
+    if time.time() - created_at < 2*3600:
+        bot.reply_to(message, "❌ Ваш клан слишком молод для объявления войны (меньше 2 часов после создания).")
+        return
+    # clan cooldown 4 hours
+    if time.time() - last_war_ts < 4*3600:
+        bot.reply_to(message, "⏳ Ваш клан недавно объявлял войну — подождите.")
+        return
+    # compute HPs: HP каждого участника (base 100 + property bonuses) * (sum of tokens of don+capo)
+    def clan_total_hp_and_tokens(cid):
+        total_hp = 0
+        tokens = 0
+        with db.get_connection() as conn:
+            members = conn.execute("SELECT user_id, role FROM clan_members WHERE clan_id=?", (cid,)).fetchall()
+        for uid, role in members:
+            # compute HP as in duels
+            props = _get_properties(uid)
+            base = 100
+            if 'hut' in props: base += 15
+            if 'communal' in props: base += 25
+            if 'country' in props: base += 35
+            helpers = _get_helpers(uid)
+            if helpers.get("defender",0):
+                base += 30 * helpers.get("defender",0)
+            total_hp += base
+            if role in ("don","capo"):
+                tokens += _get_tokens(uid)
+        return total_hp, tokens
+
+    hp_a, tokens_a = clan_total_hp_and_tokens(clan_id)
+    hp_b, tokens_b = clan_total_hp_and_tokens(target_id)
+    # attack strength random between goods/2 and goods
+    goods_a = _clan_goods_get(clan_id)
+    goods_b = _clan_goods_get(target_id)
+    atk_a = random.randint(max(1, goods_a//2), max(1, goods_a))
+    atk_b = random.randint(max(1, goods_b//2), max(1, goods_b))
+    # multiply attack by token factor (don+capo tokens)
+    atk_a = int(atk_a * (1 + tokens_a/100.0))
+    atk_b = int(atk_b * (1 + tokens_b/100.0))
+
+    # resolve
+    # a_score = hp_a + atk_a, b_score = hp_b + atk_b
+    score_a = hp_a + atk_a
+    score_b = hp_b + atk_b
+    # texts
+    bot.send_message(chat_id, f"⚔️ Война: {_display_name(caller)} объявил войну клану {_display_name(target[2]) if len(target)>2 else target_name}!\nАтака: {atk_a}/{atk_b} — HP: {hp_a}/{hp_b}")
+    if score_a == score_b:
+        bot.send_message(chat_id, "⚖️ Ничья — война не принесла изменений.")
+    elif score_a > score_b:
+        # a wins
+        stolen = int(_clan_goods_get(target_id) * 0.8)
+        _clan_goods_subtract(target_id, stolen)
+        _clan_goods_add(clan_id, stolen)
+        # record wins
+        with db.get_connection() as conn:
+            conn.execute("UPDATE clans SET wins = wins + 1, last_war_ts=? WHERE clan_id=?", (int(time.time()), clan_id))
+            conn.execute("UPDATE clan_stats SET wars_won = COALESCE(wars_won,0) + 1 WHERE clan_id=?", (clan_id,))
+            conn.commit()
+        bot.send_message(chat_id, f"🏆 Победа! Ваш клан захватил {stolen} товаров.")
+    else:
+        # b wins
+        stolen = int(_clan_goods_get(clan_id) * 0.8)
+        _clan_goods_subtract(clan_id, stolen)
+        _clan_goods_add(target_id, stolen)
+        with db.get_connection() as conn:
+            conn.execute("UPDATE clans SET last_war_ts=? WHERE clan_id=?", (int(time.time()), clan_id))
+            conn.commit()
+        bot.send_message(chat_id, f"💥 Поражение. Противник отобрал {stolen} товаров.")
+
+def clan_sell_handler(bot, message):
+    # /clan_sell — Don или Capo every 10 hours, needs goods > 80
+    register_user(message)
+    uid = message.from_user.id
+    chat_id = message.chat.id
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT clan_id, name, don_id FROM clans WHERE chat_id=? AND (don_id=? OR EXISTS(SELECT 1 FROM clan_members WHERE clan_id=clans.clan_id AND user_id=? AND role='capo'))", (chat_id, uid, uid)).fetchone()
+    if not row:
+        bot.reply_to(message, "❌ Ты не Дон и не Капо в клане.")
+        return
+    clan_id = row[0]
+    role = _get_member_role(clan_id, uid)
+    goods = _clan_goods_get(clan_id)
+    if goods < 80:
+        bot.reply_to(message, "❗ Товаров меньше 80 — нельзя продавать.")
+        return
+    # cooldown per role: store last_war_ts reused? better to do per-member cooldown; for brevity: simple per-clan last sell stored in clans.last_war_ts (repurposed)
+    with db.get_connection() as conn:
+        last_sell = conn.execute("SELECT last_war_ts FROM clans WHERE clan_id=?", (clan_id,)).fetchone()[0] or 0
+    if time.time() - last_sell < 10*3600:
+        bot.reply_to(message, "⏳ Клан недавно продавал товары — подождите.")
+        return
+    # compute sold percent
+    if role == "don":
+        percent = 0.70
+    else:
+        percent = 0.55
+    sold = int(goods * percent)
+    # each good sells for random between 1400 and 14000
+    total = 0
+    for _ in range(sold):
+        total += random.randint(1400, 14000)
+    # add entire total to treasury
+    _treasury_add(total)
+    # distribute: 30% to Don, 30% to Capo(s) (equally), 40% to other members
+    share_don = int(total * 0.30)
+    share_capo = int(total * 0.30)
+    share_members = int(total * 0.40)
+    # pay Don
+    with db.get_connection() as conn:
+        don_row = conn.execute("SELECT don_id FROM clans WHERE clan_id=?", (clan_id,)).fetchone()
+        don_id = don_row[0] if don_row else None
+        if don_id:
+            _update_balance(don_id, share_don)
+        capos = conn.execute("SELECT user_id FROM clan_members WHERE clan_id=? AND role='capo'", (clan_id,)).fetchall()
+        capo_count = len(capos)
+        if capo_count:
+            per_capo = share_capo // capo_count
+            for (cid,) in capos:
+                _update_balance(cid, per_capo)
+        members = conn.execute("SELECT user_id FROM clan_members WHERE clan_id=? AND role='member'", (clan_id,)).fetchall()
+        member_count = len(members)
+        if member_count:
+            per_member = share_members // member_count
+            for (mid,) in members:
+                _update_balance(mid, per_member)
+        # reduce goods
+        _clan_goods_subtract(clan_id, sold)
+        # update last_war_ts used as last_sell_ts now
+        conn.execute("UPDATE clans SET last_war_ts=? WHERE clan_id=?", (int(time.time()), clan_id))
+        conn.commit()
+    bot.reply_to(message, f"💰 Продано {sold} товаров на сумму {total} бублей. Деньги распределены. Склад: {_clan_goods_get(clan_id)}")
+
+def clan_top_handler(bot, message):
+    with db.get_connection() as conn:
+        rows = conn.execute("SELECT c.name, cs.wars_won, (SELECT COUNT(*) FROM clan_members m WHERE m.clan_id=c.clan_id) as members FROM clans c LEFT JOIN clan_stats cs ON c.clan_id=cs.clan_id WHERE c.chat_id=? ORDER BY cs.wars_won DESC LIMIT 10", (message.chat.id,)).fetchall()
+    if not rows:
+        bot.reply_to(message, "ℹ️ Кланов нет.")
+        return
+    lines = []
+    for i, (name, wins, members) in enumerate(rows, 1):
+        lines.append(f"{i}. {name} — побед: {wins or 0}, участников: {members}")
+    bot.send_message(message.chat.id, "🏆 Топ кланов:\n" + "\n".join(lines))
+
+def clan_delete_handler(bot, message):
+    # only Don, confirmation
+    register_user(message)
+    uid = message.from_user.id
+    chat_id = message.chat.id
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT clan_id, name FROM clans WHERE chat_id=? AND don_id=?", (chat_id, uid)).fetchone()
+    if not row:
+        bot.reply_to(message, "❌ Ты не Дон.")
+        return
+    clan_id, cname = row
+    markup = types.InlineKeyboardMarkup()
+    markup.row(types.InlineKeyboardButton("Подтвердить удаление", callback_data=f"clan_delete_confirm_{clan_id}_{uid}"),
+               types.InlineKeyboardButton("Отмена", callback_data=f"clan_delete_cancel_{clan_id}_{uid}"))
+    bot.send_message(chat_id, f"⚠️ Подтвердите удаление клана '{cname}' (действие необратимо).", reply_markup=markup)
+
+def clan_delete_callback(bot, call):
+    try:
+        parts = call.data.split("_")
+        if parts[0] != "clan" or parts[1] != "delete":
+            return
+        action = parts[2]  # confirm/cancel
+        clan_id = int(parts[3])
+        initiator = int(parts[4])
+        if call.from_user.id != initiator:
+            bot.answer_callback_query(call.id, "❌ Только Дон может подтвердить", show_alert=True)
+            return
+        if action == "confirm":
+            with db.get_connection() as conn:
+                conn.execute("DELETE FROM clan_members WHERE clan_id=?", (clan_id,))
+                conn.execute("DELETE FROM clan_goods WHERE clan_id=?", (clan_id,))
+                conn.execute("DELETE FROM clans WHERE clan_id=?", (clan_id,))
+                conn.execute("DELETE FROM clan_bans WHERE clan_id=?", (clan_id,))
+                conn.commit()
+            bot.send_message(call.message.chat.id, "✅ Клан удалён.")
+        else:
+            bot.send_message(call.message.chat.id, "ℹ️ Отмена удаления.")
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except:
+            pass
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        log.exception(f"clan_delete_callback err: {e}")
+        try: bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
+        except: pass
+
+def clan_reset_handler(bot, message):
+    # only OWNER: reset all clans (confirmation)
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Нет доступа")
+        return
+    markup = types.InlineKeyboardMarkup()
+    markup.row(types.InlineKeyboardButton("Подтвердить сброс", callback_data=f"clan_reset_confirm_{OWNER_ID}"),
+               types.InlineKeyboardButton("Отмена", callback_data=f"clan_reset_cancel_{OWNER_ID}"))
+    bot.send_message(message.chat.id, "⚠️ Подтвердите полную очистку системы кланов.", reply_markup=markup)
+
+def clan_reset_callback(bot, call):
+    try:
+        parts = call.data.split("_")
+        if parts[0] != "clan" or parts[1] != "reset":
+            return
+        action = parts[2]
+        initiator = int(parts[3])
+        if call.from_user.id != initiator:
+            bot.answer_callback_query(call.id, "❌ Только владелец может подтвердить", show_alert=True)
+            return
+        if action == "confirm":
+            with db.get_connection() as conn:
+                conn.execute("DELETE FROM clan_members")
+                conn.execute("DELETE FROM clans")
+                conn.execute("DELETE FROM clan_goods")
+                conn.execute("DELETE FROM clan_bans")
+                conn.execute("DELETE FROM clan_stats")
+                conn.commit()
+            bot.send_message(call.message.chat.id, "✅ Система кланов полностью очищена.")
+        else:
+            bot.send_message(call.message.chat.id, "ℹ️ Отмена.")
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except: pass
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        log.exception(f"clan_reset_callback err: {e}")
+        try: bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
+        except: pass
+
+def clan_help_handler(bot, message):
+    text = (
+        "📜 Команды кланов:\n\n"
+        "/clan_create <название> — создать клан (только при состоянии 'Обычное состояние')\n"
+        "/clan_join <название> — вступить в клан (только если у тебя не лучше чем 'Упадок')\n"
+        "/clan_kick @user — Дон исключает участника (подтверждение)\n"
+        "/clan_ban @user — Дон банит навсегда\n"
+        "/clan_unban @user — Дон разбанивает\n"
+        "/clan_transfer @user – Дон передаёт своё Донство какому-нибудь Капо и становится участником\n"
+        "/clan_rename <название> – Дон меняет название клана\n"
+        "/clans — список кланов в чате\n"
+        "/clan – информация о своём клане\n"
+        "/clan_grind — на вылазке добыть 2-5 запретных товаров (кулдаун 40 сек)\n"
+        "/clan_up @user — Дон повышает до Капо (кулдаун 36 часов)\n"
+        "/clan_war <название> — Дон объявляет войну (кулдаун 4 часа, нельзя в первые 2 часа после создания клана)\n"
+        "/clan_sell — Дон/Капо продаёт товары (только при >80 товаров, кулдаун 10 часов)\n"
+        "/clan_top — топ кланов по победам\n"
+    )
+    bot.send_message(message.chat.id, text)
+# ---------------- /clan (информация о клане пользователя) ----------------
+def clan_info_handler(bot, message):
+    register_user(message)
+    uid = message.from_user.id
+    chat_id = message.chat.id
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT c.clan_id, c.name, c.don_id, c.created_at, c.wins "
+                "FROM clans c JOIN clan_members m ON c.clan_id = m.clan_id "
+                "WHERE m.user_id = ? AND c.chat_id = ?",
+                (uid, chat_id)
+            ).fetchone()
+        if not row:
+            bot.reply_to(message, "ℹ️ Ты не состоишь в клане в этом чате.")
+            return
+
+        clan_id, name, don_id, created_at, wins = row
+        # members count
+        with db.get_connection() as conn:
+            members_count = conn.execute("SELECT COUNT(*) FROM clan_members WHERE clan_id=?", (clan_id,)).fetchone()[0] or 0
+        goods = _clan_goods_get(clan_id)
+        role = _get_member_role(clan_id, uid) or "member"
+        role_text = "Дон" if role == "don" else "Капо" if role == "capo" else "Участник"
+        don_display = _display_name(don_id)
+
+        created_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at)) if created_at else "—"
+        text = (
+            f"🏷️ Название: {name}\n"
+            f"👑 Дон: {don_display}\n"
+            f"🧭 Твоя роль: {role_text}\n"
+            f"👥 Участников: {members_count}\n"
+            f"📦 Склад (товары): {goods}\n"
+            f"🏆 Побед клана: {wins or 0}\n"
+            f"🕒 Создан: {created_str}\n"
+        )
+        bot.send_message(message.chat.id, text)
+    except Exception as e:
+        log.exception(f"clan_info_handler error: {e}")
+        bot.reply_to(message, "❌ Ошибка при получении информации о клане.")
+
+# ---------------- /clan_rename <название> (только Дон, кулдаун 8 часов) ----------------
+def clan_rename_handler(bot, message):
+    register_user(message)
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(message, "❗ Формат: /clan_rename <новое название>")
+        return
+    new_name = parts[1].strip()
+    if len(new_name) == 0 or len(new_name) > 30:
+        bot.reply_to(message, "❗ Название должно быть от 1 до 30 символов.")
+        return
+
+    # проверка раскладки — все русские или все латинские (без смешения)
+    def _is_all_ru(s):
+        # допускаем пробелы/цифры, но буквы — только кириллица
+        for ch in s:
+            if ch.isalpha() and not ('\u0400' <= ch <= '\u04FF'):
+                return False
+        return True
+    def _is_all_en(s):
+        for ch in s:
+            if ch.isalpha() and not ('a' <= ch.lower() <= 'z'):
+                return False
+        return True
+    if not (_is_all_ru(new_name) or _is_all_en(new_name)):
+        bot.reply_to(message, "❗ Название должно содержать либо только русские буквы, либо только латинские (без смешения).")
+        return
+
+    chat_id = message.chat.id
+    uid = message.from_user.id
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute("SELECT clan_id, don_id, created_at, last_war_ts FROM clans WHERE chat_id=? AND don_id=?", (chat_id, uid)).fetchone()
+        if not row:
+            bot.reply_to(message, "❌ Ты не Дон ни одного клана в этом чате.")
+            return
+        clan_id = row[0]
+
+        # Убедимся, что колонка last_rename_ts есть (иначе добавим)
+        cols = []
+        with db.get_connection() as conn:
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(clans)").fetchall()]
+        if "last_rename_ts" not in cols:
+            with db.get_connection() as conn:
+                conn.execute("ALTER TABLE clans ADD COLUMN last_rename_ts INTEGER DEFAULT 0")
+                conn.commit()
+
+        with db.get_connection() as conn:
+            last_rename = conn.execute("SELECT last_rename_ts FROM clans WHERE clan_id=?", (clan_id,)).fetchone()
+            last_rename_ts = last_rename[0] if last_rename and last_rename[0] else 0
+
+        COOLDOWN = 8 * 3600
+        now = int(time.time())
+        if now - last_rename_ts < COOLDOWN:
+            bot.reply_to(message, f"⏳ Название уже меняли недавно. Подожди ещё {int((COOLDOWN - (now - last_rename_ts))/60)} минут.")
+            return
+
+        # поменять имя
+        with db.get_connection() as conn:
+            conn.execute("UPDATE clans SET name=?, last_rename_ts=? WHERE clan_id=?", (new_name, now, clan_id))
+            conn.commit()
+        bot.reply_to(message, f"✅ Название клана изменено на: {new_name}")
+    except Exception as e:
+        log.exception(f"clan_rename_handler error: {e}")
+        bot.reply_to(message, "❌ Ошибка при смене названия клана.")
+        
+def clan_leave_handler(bot, message):
+    """
+    /clan_leave  — выход из клана (role member/capo). Дон выйти не может.
+    Кулдаун между выходами одного пользователя: 1 час (реализован в памяти).
+    """
+    try:
+        register_user(message)
+        uid = message.from_user.id
+        chat_id = message.chat.id
+
+        # Найдём запись о членстве в клане в текущем чате
+        with db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT m.clan_id, m.role, c.name FROM clan_members m "
+                "JOIN clans c ON m.clan_id = c.clan_id "
+                "WHERE m.user_id = ? AND c.chat_id = ? LIMIT 1",
+                (uid, chat_id)
+            ).fetchone()
+
+        if not row:
+            bot.reply_to(message, "ℹ️ Ты не состоишь в клане в этом чате.")
+            return
+
+        clan_id, role, clan_name = row
+
+        # Дон не может просто уйти
+        if role == "don":
+            bot.reply_to(message, "❗ Дон не может покинуть клан. Передай донство другому или используй /clan_delete.")
+            return
+
+        # Инициализация memory cooldown
+        if not hasattr(clan_leave_handler, "_last_leave"):
+            clan_leave_handler._last_leave = {}
+
+        now = time.time()
+        last = clan_leave_handler._last_leave.get(uid, 0)
+        COOLDOWN = 60 * 60  # 1 час
+
+        if now - last < COOLDOWN:
+            wait = int(COOLDOWN - (now - last))
+            bot.reply_to(message, f"⏳ Не торопись. Подожди {wait} сек.")
+            return
+
+        # Удаляем участника из клана
+        with db.get_connection() as conn:
+            conn.execute("DELETE FROM clan_members WHERE clan_id=? AND user_id=?", (clan_id, uid))
+            conn.commit()
+
+        # Сохраняем таймстамп выхода в памяти
+        clan_leave_handler._last_leave[uid] = now
+
+        bot.reply_to(message, f"✅ Ты покинул клан '{clan_name}'. Теперь ты не состояшь в нём.")
+    except Exception as e:
+        log.exception(f"clan_leave_handler error: {e}")
+        bot.reply_to(message, "❌ Ошибка при попытке покинуть клан.")
+        
+# ---------------- /clan_transfer (дон передаёт донство капо) ----------------
+def clan_transfer_handler(bot, message):
+    """
+    /clan_transfer @nick
+    Только Дон может начать. Цель должна быть Капо в том же клане.
+    Создаёт сообщение с кнопками Подтвердить/Отмена (callback).
+    """
+    try:
+        register_user(message)
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            bot.reply_to(message, "❗ Формат: /clan_transfer @ник")
+            return
+
         target_raw = parts[1]
+        chat_id = message.chat.id
+        initiator = message.from_user.id
+
+        # Найти клан, где инициатор — Дон
+        with db.get_connection() as conn:
+            row = conn.execute("SELECT clan_id, name FROM clans WHERE chat_id=? AND don_id=?", (chat_id, initiator)).fetchone()
+        if not row:
+            bot.reply_to(message, "❌ Ты не Дон ни одного клана в этом чате.")
+            return
+        clan_id, clan_name = row
+
+        # Найти target_id по @username или цифре
         if target_raw.isdigit():
             target_id = int(target_raw)
         else:
             with db.get_connection() as conn:
                 r = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
                 target_id = r[0] if r else None
-    if not target_id:
-        bot.reply_to(message, "❌ Пользователь не найден.")
-        return
-    owner = message.from_user.id
-    # проверить что target_id — раб именно этого owner
-    cur = _is_slave(target_id)
-    if not cur or cur != owner:
-        bot.reply_to(message, "❌ Этот пользователь не является вашим рабом.")
-        return
-    _release_slave(target_id)
-    bot.reply_to(message, f"✅ {_display_name(target_id)} освобождён.")
 
-def escape_handler(bot, message):
-    register_user(message)
-    uid = message.from_user.id
-    owner = _is_slave(uid)
-    if not owner:
-        bot.reply_to(message, "❗ Вы не являетесь рабом.")
-        return
-    # шанс побега 35% уменьшён на 15% если у owner есть guard helper
-    base = 0.35
-    owner_helpers = _get_helpers(owner)
-    if owner_helpers.get("guard", 0):
-        base -= 0.15
-    base = max(0.05, base)
-    if random.random() < base:
-        _release_slave(uid)
-        bot.reply_to(message, "✅ Ты убежал и теперь свободен.")
-    else:
-        bot.reply_to(message, "❌ Попытка побега не удалась.")
+        if not target_id:
+            bot.reply_to(message, "❌ Пользователь не найден в базе. Попроси его написать боту /start.")
+            return
 
-def topsl_handler(bot, message):
-    with db.get_connection() as conn:
-        rows = conn.execute("SELECT owner_id, COUNT(*) as cnt FROM slaves GROUP BY owner_id ORDER BY cnt DESC LIMIT 10").fetchall()
-    if not rows:
-        bot.reply_to(message, "Пока нет рабовладельцев.")
-        return
-    lines = []
-    for i, (owner_id, cnt) in enumerate(rows, 1):
-        lines.append(f"{i}. {_display_name(owner_id)} — {cnt} раб(ов)")
-    bot.send_message(message.chat.id, "🏆 Топ рабовладельцев:\n" + "\n".join(lines))
+        # Проверить, что target — член этого клана и имеет роль capo
+        role = _get_member_role(clan_id, target_id)
+        if not role:
+            bot.reply_to(message, "❌ Цель не состоит в твоём клане.")
+            return
+        if role != "capo":
+            bot.reply_to(message, "❌ Донство можно передать только игроку с ролью Капо.")
+            return
 
-def collect_handler(bot, message):
-    # принудительный запуск налога/сбора для владельца
-    register_user(message)
-    owner = message.from_user.id
-    total = _apply_hourly_tax_for_owner(owner)
-    bot.reply_to(message, f"✅ Собрано с рабов: {total} бублей")
+        # Подготовить подтверждение
+        markup = types.InlineKeyboardMarkup()
+        confirm_data = f"clan_transfer_confirm_{clan_id}_{target_id}_{initiator}"
+        cancel_data = f"clan_transfer_cancel_{clan_id}_{target_id}_{initiator}"
+        markup.row(
+            types.InlineKeyboardButton("✅ Подтвердить передачу донства", callback_data=confirm_data),
+            types.InlineKeyboardButton("❌ Отмена", callback_data=cancel_data)
+        )
 
-# === Продажа раба: /sl_sell и /sl_buy ===
-def sl_sell_handler(bot, message):
-    register_user(message)
-    parts = (message.text or "").split()
-    if len(parts) < 2:
-        bot.reply_to(message, "❗ Формат: /sl_sell <ник_раба_or_id>")
-        return
-    target_raw = parts[1]
-    if target_raw.isdigit():
-        slave_id = int(target_raw)
-    else:
+        bot.send_message(chat_id,
+                         f"⚠️ Дон {_display_name(initiator)} предлагает передать донство {_display_name(target_id)} в клане '{clan_name}'.\n\n"
+                         f"Подтвердите действие (подтвердить может только инициатор).",
+                         reply_markup=markup)
+    except Exception as e:
+        log.exception(f"clan_transfer_handler error: {e}")
+        bot.reply_to(message, "❌ Ошибка при попытке начать передачу донства.")
+        
+# ---------------- Callback для подтверждения передачи донства ----------------
+def clan_transfer_callback(bot, call):
+    """
+    Обработчик callback'ов от кнопок передачи донства.
+    callback_data формата:
+      clan_transfer_confirm_{clan_id}_{target_id}_{initiator}
+      clan_transfer_cancel_{clan_id}_{target_id}_{initiator}
+    """
+    try:
+        data = (call.data or "")
+        if not data.startswith("clan_transfer_"):
+            return
+
+        parts = data.split("_")
+        if len(parts) < 5:
+            bot.answer_callback_query(call.id, "❌ Неверные данные.", show_alert=True)
+            return
+
+        action = parts[2]  # confirm / cancel
+        clan_id = int(parts[3])
+        target_id = int(parts[4])
+        initiator = int(parts[5]) if len(parts) > 5 else None
+
+        # Разрешено нажимать только инициатору (дон)
+        if call.from_user.id != initiator:
+            bot.answer_callback_query(call.id, "❌ Только инициатор (дон) может подтвердить/отменить.", show_alert=True)
+            return
+
+        # Проверим, что инициатор всё ещё дон клана
         with db.get_connection() as conn:
-            r = conn.execute("SELECT user_id FROM users WHERE username=?", (target_raw.lstrip("@"),)).fetchone()
-            slave_id = r[0] if r else None
-    if not slave_id:
-        bot.reply_to(message, "❌ Раб не найден.")
-        return
-    seller = message.from_user.id
-    # проверка, что slave действительно ваш раб
-    cur_owner = _is_slave(slave_id)
-    if not cur_owner or cur_owner != seller:
-        bot.reply_to(message, "❌ Этот пользователь не является вашим рабом.")
-        return
-    # вычисляем цену: 4/5 * (0.7*баланс_раба + 0.4*баланс_владельца)
-    slave_bal = _get_balance(slave_id)
-    seller_bal = _get_balance(seller)
-    price = int(math.floor( (0.7 * slave_bal + 0.4 * seller_bal) * 4.0 / 5.0 ))
-    if price <= 0:
-        bot.reply_to(message, "❌ Цена получилась нулевой — продажа невозможна.")
-        return
-    now = int(time.time())
-    with db.get_connection() as conn:
-        r = conn.execute("INSERT INTO slave_sales (slave_id, seller_id, price, created_at) VALUES (?, ?, ?, ?)",
-                         (slave_id, seller, price, now))
-        conn.commit()
-        sale_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    bot.send_message(message.chat.id, f"🔖 Продажа раба выставлена: {_display_name(slave_id)} (id {slave_id})\nЦена: {price} бублей\nЧтобы купить — напишите: /sl_buy {sale_id}\nПервый, кто напишет /sl_buy {sale_id}, купит раба (проверьте баланс).")
-
-def sl_buy_handler(bot, message):
-    register_user(message)
-    parts = (message.text or "").split()
-    if len(parts) < 2:
-        bot.reply_to(message, "❗ Формат: /sl_buy <sale_id>")
-        return
-    sale_id_raw = parts[1]
-    if not sale_id_raw.isdigit():
-        bot.reply_to(message, "❗ sale_id должен быть числом")
-        return
-    sale_id = int(sale_id_raw)
-    buyer = message.from_user.id
-    with db.get_connection() as conn:
-        row = conn.execute("SELECT slave_id, seller_id, price FROM slave_sales WHERE sale_id=?", (sale_id,)).fetchone()
+            row = conn.execute("SELECT don_id, name FROM clans WHERE clan_id=?", (clan_id,)).fetchone()
         if not row:
-            bot.reply_to(message, "❌ Продажа не найдена или уже завершена.")
+            bot.answer_callback_query(call.id, "❌ Клан не найден.", show_alert=True)
             return
-        slave_id, seller_id, price = row
-        # проверка - slave должен быть все ещё рабом seller_id
-        cur_owner = _is_slave(slave_id)
-        if not cur_owner or cur_owner != seller_id:
-            bot.reply_to(message, "❌ Этот раб больше не принадлежит продавцу. Операция отменена.")
-            # удаляем запись на всякий случай
-            conn.execute("DELETE FROM slave_sales WHERE sale_id=?", (sale_id,))
-            conn.commit()
+        current_don, clan_name = row
+        if current_don != initiator:
+            bot.answer_callback_query(call.id, "❌ Ты больше не дон этого клана.", show_alert=True)
             return
-        if buyer == seller_id:
-            bot.reply_to(message, "❌ Нельзя купить своего раба.")
-            return
-        bal = _get_balance(buyer)
-        if bal < price:
-            bot.reply_to(message, "❌ У вас недостаточно средств для покупки.")
-            return
-        # перевод денег
-        _update_balance(buyer, -price)
-        _update_balance(seller_id, price)
-        # смена владельца
-        _enslave(buyer, slave_id)
-        # удаляем заявку
-        conn.execute("DELETE FROM slave_sales WHERE sale_id=?", (sale_id,))
-        conn.commit()
-    bot.send_message(message.chat.id, f"✅ {_display_name(buyer)} купил {_display_name(slave_id)} за {price} бублей у {_display_name(seller_id)}!")
 
+        # Проверим, что target всё ещё капо в том же клане
+        target_role = _get_member_role(clan_id, target_id)
+        if not target_role or target_role != "capo":
+            bot.answer_callback_query(call.id, "❌ Цель больше не Капо или не в клане.", show_alert=True)
+            return
+
+        if action == "cancel":
+            # Отмена
+            try:
+                bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+            except:
+                pass
+            bot.send_message(call.message.chat.id, "ℹ️ Передача донства отменена.")
+            bot.answer_callback_query(call.id)
+            return
+
+        # Подтверждение: присвоить target роль don, а инициатору роль member
+        with db.get_connection() as conn:
+            conn.execute("UPDATE clan_members SET role = 'member' WHERE clan_id=? AND user_id=?", (clan_id, initiator))
+            conn.execute("UPDATE clan_members SET role = 'don' WHERE clan_id=? AND user_id=?", (clan_id, target_id))
+            conn.execute("UPDATE clans SET don_id = ? WHERE clan_id=?", (target_id, clan_id))
+            conn.commit()
+
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except:
+            pass
+
+        bot.send_message(call.message.chat.id,
+                         f"✅ Донство передано: {_display_name(initiator)} теперь обычный участник, {_display_name(target_id)} — новый Дон клана '{clan_name}'.")
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        log.exception(f"clan_transfer_callback error: {e}")
+        try: bot.answer_callback_query(call.id, "❌ Ошибка при обработке подтверждения.", show_alert=True)
+        except: pass
+        
+        
+        
 # === /osebe (о себе) including helpers & tokens & properties ===
 def osebe_handler(bot, message):
     register_user(message)
@@ -1970,8 +2698,24 @@ def osebe_handler(bot, message):
     if helpers.get("phoenix"): helper_lines.append("🐦‍🔥 Феникс")
     tokens = _get_tokens(uid)
     bank = _get_bbank(uid)
+    clan_lines = []
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute(
+            "SELECT c.name, m.role FROM clans c JOIN clan_members m ON c.clan_id = m.clan_id "
+            "WHERE m.user_id = ? AND c.chat_id = ?",
+            (uid, message.chat.id)
+        ).fetchone()
+        if row:
+            clan_name, clan_role = row
+            role_text = "Дон" if clan_role == "don" else "Капо" if clan_role == "capo" else "Участник"
+        # добавляем в текст osebe, например:
+            clan_lines.append(f"🏛️ Клан: {clan_name} (твоя роль: {role_text})")
+    except Exception as e:
+            log.exception(f"osebe clan fetch error: {e}")
+    # не прерываем показ остальной информации
     bot.reply_to(message,
-                 f"👤 О себе:\nИмя: {nick}\nБаланс: {_get_balance(uid)} бублей\nОкак-Токены: {tokens}\nНедвижимость: {', '.join(props)}\nПомощники: {', '.join(helper_lines) if helper_lines else 'Нет'}\nВ банке: {bank['bank_balance']} (инвестировано: {bank['invested']})")
+                 f"👤 О себе:\n📝Имя: {nick}\n💰Баланс: {_get_balance(uid)} бублей\n☢️Окак-Токены: {tokens}\n🏘️Недвижимость: {', '.join(props)}\n🙋Помощники: {', '.join(helper_lines) if helper_lines else 'Нет'}\n💳В банке: {bank['bank_balance']} (инвестировано: {bank['invested']})\n{', '.join(clan_lines)}")
 
 # === /prop (показать недвижимость и наличие) ===
 def prop_handler(bot, message):
@@ -2045,7 +2789,7 @@ def okakshop_handler(bot, message):
     tokens = _get_tokens(uid)
     text = ("🪝Добро пожаловать в Окак-Шоп!🪝\n\n"
             "💂 Защитник — 2 Окак-Токена: +30 HP в дуэлях\n"
-            "👮 Охранник — 4 Окак-Токена: уменьшает шансы побега вашего раба на 15%\n"
+            "👮 Охранник — 4 Окак-Токена: временно бессмысленно\n"
             "🧝 Эзотерик — 6 Окак-Токенов: открывает команду /shkatulka (доступна каждые 6 часов)\n"
             "🐦‍🔥 Феникс — 12 Окак-Токенов: удваивает заработки для рабочих команд\n\n"
             f"У вас: {tokens} Окак-Токенов\nВыберите покупку:")
@@ -2088,7 +2832,7 @@ def okakshop_callback_handler(bot, call):
             _set_helper_field(uid, "esoteric", cur.get("esoteric", 0) + 1)
         elif item == "phoenix":
             _set_helper_field(uid, "phoenix", cur.get("phoenix", 0) + 1)
-        bot.send_message(call.message.chat.id, f"✅ Покупка успешна: {item}. Токенов осталось: {_get_tokens(uid)}")
+        bot.send_message(call.message.chat.id, f"✅ Покупка успешна: {item}. Окак-Токенов осталось: {_get_tokens(uid)}")
         bot.answer_callback_query(call.id)
     except Exception as e:
         log.exception(f"okakshop_callback_handler: {e}")
@@ -2121,7 +2865,7 @@ def shkatulka_handler(bot, message):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton(emojis[0], callback_data=f"shk_{uid}_0_{lucky}"))
     markup.add(types.InlineKeyboardButton(emojis[1], callback_data=f"shk_{uid}_1_{lucky}"))
-    bot.send_message(message.chat.id, "🔮 Выбери шкатулку:", reply_markup=markup)
+    bot.send_message(message.chat.id, "🔮Эзотерик тебе даёт шанс испытать свою удачу!\n\n Выбери шкатулку:", reply_markup=markup)
 
 def shkatulka_callback_handler(bot, call):
     try:
@@ -2141,7 +2885,7 @@ def shkatulka_callback_handler(bot, call):
             _update_tokens(uid, 1)
             bot.send_message(call.message.chat.id, f"✨ {_display_name(uid)}, вы нашли 1 Окак-Токен! Токенов: {_get_tokens(uid)}")
         else:
-            amount = random.randint(40_000, 80_000)
+            amount = random.randint(40000, 80000)
             # Phoenix doubles
             if _get_helpers(uid).get("phoenix", 0):
                 amount *= 2
@@ -2154,6 +2898,57 @@ def shkatulka_callback_handler(bot, call):
         try: bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
         except: pass
 
+# --- Wipe all bubl balances (admin only) ---
+def wipe_bubl_handler(bot, message):
+    """
+    Обнуляет все балансы в базе в таблице balances и/или в колонке users.balance.
+    Доступ только для владельца (ID 5758264503).
+    """
+    log.warning("🚨 Wipe_bubl_handler вызван!")
+    ADMIN_ID = 5758264503
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ У вас нет прав использовать эту команду.")
+        return
+
+    try:
+        with db.get_connection() as conn:
+            # Проверяем наличие таблицы balances
+            t = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='balances'"
+            ).fetchone()
+            if t:
+                # количество строк в balances до обновления
+                count_balances = conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0] or 0
+                conn.execute("UPDATE balances SET balance = 0")
+            else:
+                count_balances = 0
+
+            # Проверяем, есть ли в users колонка balance
+            cols = conn.execute("PRAGMA table_info(users)").fetchall()
+            has_users_balance = any(c[1] == "balance" for c in cols) if cols else False
+            if has_users_balance:
+                count_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] or 0
+                conn.execute("UPDATE users SET balance = 0")
+            else:
+                count_users = 0
+
+            conn.commit()
+
+        # Ответ пользователю
+        if count_balances == 0 and count_users == 0:
+            bot.reply_to(
+                message,
+                "ℹ️ Ничего не изменено: не найдены таблица `balances` и колонка `users.balance`."
+            )
+        else:
+            bot.reply_to(
+                message,
+                f"✅ Все балансы обнулены.\n"
+                f"rows affected — balances: {count_balances}, users: {count_users}"
+            )
+    except Exception as e:
+        log.error(f"/wipe_bubl error: {e}")
+        bot.reply_to(message, f"⚠️ Ошибка при очистке балансов: {e}")
 # === Перекроенные команды работы: mafia, clean, pizza, waiter, lawyer, youtuber handled above ===
 
 # === /bubl, /chests, дуэли уже реализованы ===
@@ -2186,7 +2981,7 @@ def register_extra_handlers(bot):
     # игры (команды pocket/casino/loto)
     @bot.message_handler(commands=['pocket'])
     def _h_pocket(m):
-        bet_game_handler(bot, m, 0.70, 1.25,
+        bet_game_handler(bot, m, 0.6, 2,
                          ["😎Молодец, воришка. Ты потерял свои деньги на ходу, но получил больше - аж {win} бублей!",
                           "✨❄️Моя школа! {win} тебе начислено за твой проворот."],
                          ["🙄Ну ты и лоханулся... мало того, что ты ничего не украл, так у тебя украли {bet}!",
@@ -2202,7 +2997,7 @@ def register_extra_handlers(bot):
 
     @bot.message_handler(commands=['loto'])
     def _h_loto(m):
-        bet_game_handler(bot, m, 0.10, 14.0,
+        bet_game_handler(bot, m, 0.15, 10.0,
                          ["🎟 Счастливый билет! +{win} бублей (ставка {bet}).",
                           "🌟 Умный человек в очках выиграл {win} бублей скачать обои"],
                          ["🪙 Ой-ой-ой, не повезло. Ставка в аж {bet} бублей ушла в воздух.",
@@ -2279,6 +3074,10 @@ def register_extra_handlers(bot):
     # transfers and admin
     @bot.message_handler(func=lambda m: isinstance(m.text, str) and m.text.lower().startswith("дать "))
     def _h_transfer(m): transfer_handler(bot, m)
+    
+    # Регистрация хэндлера (вставь рядом с другими регистрациями)
+    @bot.message_handler(commands=['wipe_bubl', 'wipebubl'])
+    def _wipe_bubl(message):log.warning("🚨 /wipe_bubl вызван!");wipe_bubl_handler(bot, message)
 
     @bot.message_handler(commands=['add_bubl'])
     def _h_add_bubl(m): add_bubl_handler(bot, m)
@@ -2354,32 +3153,6 @@ def register_extra_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("shk_"))
     def _h_shk_cb(call): shkatulka_callback_handler(bot, call)
 
-    # sell/buy slaves
-    @bot.message_handler(commands=['sl_sell'])
-    def _h_sl_sell(m): sl_sell_handler(bot, m)
-
-    @bot.message_handler(commands=['sl_buy'])
-    def _h_sl_buy(m): sl_buy_handler(bot, m)
-
-    # slavery system handlers
-    @bot.message_handler(commands=['ensl'])
-    def _h_ensl(m): ensl_handler(bot, m)
-
-    @bot.message_handler(commands=['sl'])
-    def _h_sl(m): sl_handler(bot, m)
-
-    @bot.message_handler(commands=['desl'])
-    def _h_desl(m): desl_handler(bot, m)
-
-    @bot.message_handler(commands=['escape'])
-    def _h_escape(m): escape_handler(bot, m)
-
-    @bot.message_handler(commands=['topsl'])
-    def _h_topsl(m): topsl_handler(bot, m)
-
-    @bot.message_handler(commands=['collect'])
-    def _h_collect(m): collect_handler(bot, m)
-
     # bank
     @bot.message_handler(commands=['bbank'])
     def _h_bbank(m): bbank_handler(bot, m)
@@ -2389,6 +3162,80 @@ def register_extra_handlers(bot):
 
     @bot.message_handler(commands=['withdraw'])
     def _h_withdraw(m): withdraw_handler(bot, m)
+        
+                # ---- Регистрация PSYCH ----
+    @bot.message_handler(commands=['psychs'])
+    def _psychs(message): psychs_handler(bot, message)
+
+    @bot.callback_query_handler(func=lambda c: isinstance(c.data, str) and c.data.startswith("psych_"))
+    def _psych_cb(call): psych_callback_handler(bot, call)
+
+# ---- Регистрация CLANS ----
+    @bot.message_handler(commands=['clan_create'])
+    def _clan_create(message): clan_create_handler(bot, message)
+
+    @bot.message_handler(commands=['clan_join'])
+    def _clan_join(message): clan_join_handler(bot, message)
+
+    @bot.message_handler(commands=['clan_kick'])
+    def _clan_kick(message): clan_kick_handler(bot, message)
+
+    @bot.callback_query_handler(func=lambda c: isinstance(c.data, str) and c.data.startswith("clan_kick_"))
+    def _clan_kick_cb(call): clan_kick_callback(bot, call)
+
+    @bot.message_handler(commands=['clan_ban'])
+    def _clan_ban(message): clan_ban_handler(bot, message)
+
+    @bot.message_handler(commands=['clan_unban'])
+    def _clan_unban(message): clan_unban_handler(bot, message)
+
+    @bot.message_handler(commands=['clans'])
+    def _clans(message): clans_handler(bot, message)
+
+    @bot.message_handler(commands=['clan_grind'])
+    def _clan_grind(message): clan_grind_handler(bot, message)
+
+    @bot.message_handler(commands=['clan_up'])
+    def _clan_up(message): clan_up_handler(bot, message)
+
+    @bot.message_handler(commands=['clan_war'])
+    def _clan_war(message): clan_war_handler(bot, message)
+
+    @bot.message_handler(commands=['clan_sell'])
+    def _clan_sell(message): clan_sell_handler(bot, message)
+
+    @bot.message_handler(commands=['clan_top'])
+    def _clan_top(message): clan_top_handler(bot, message)
+
+    @bot.message_handler(commands=['clan_delete'])
+    def _clan_delete(message): clan_delete_handler(bot, message)
+
+    @bot.callback_query_handler(func=lambda c: isinstance(c.data, str) and c.data.startswith("clan_delete_"))
+    def _clan_delete_cb(call): clan_delete_callback(bot, call)
+
+    @bot.message_handler(commands=['clan_reset'])
+    def _clan_reset(message): clan_reset_handler(bot, message)
+
+    @bot.callback_query_handler(func=lambda c: isinstance(c.data, str) and c.data.startswith("clan_reset_"))
+    def _clan_reset_cb(call): clan_reset_callback(bot, call)
+
+    @bot.message_handler(commands=['clan_help'])
+    def _clan_help(message): clan_help_handler(bot, message)
+    
+    @bot.message_handler(commands=['clan'])
+    def _clan_info(message): clan_info_handler(bot, message)
+
+    @bot.message_handler(commands=['clan_rename'])
+    def _clan_rename(message): clan_rename_handler(bot, message)
+    
+    @bot.message_handler(commands=['clan_leave'])
+    def _clan_leave(message): clan_leave_handler(bot, message)
+    
+    @bot.message_handler(commands=['clan_transfer'])
+    def _clan_transfer(message): clan_transfer_handler(bot, message)
+
+    @bot.callback_query_handler(func=lambda c: isinstance(c.data, str) and c.data.startswith("clan_transfer_"))
+    def _clan_transfer_cb(call): clan_transfer_callback(bot, call)
 
     # shkatulka callback already registered above via 'shk_'
     # chests callback registered above
