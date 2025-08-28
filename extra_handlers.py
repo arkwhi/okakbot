@@ -894,7 +894,7 @@ def bubl_callback_handler(bot, call):
             pass
         fake = SimpleNamespace(text=f"/{game} {bet}", from_user=call.from_user, chat=call.message.chat)
         mapping = {
-            "pocket": (0.70, 1.25,
+            "pocket": (0.65, 2,
                        ["😎Молодец, воришка. Ты потерял свои деньги на ходу, но получил больше - аж {win} бублей!",
                         "✨❄️Моя школа! {win} тебе начислено за твой проворот."],
                        ["🙄Ну ты и лоханулся... мало того, что ты ничего не украл, так у тебя украли {bet}!",
@@ -1713,7 +1713,7 @@ def tre_callback_handler(bot, call):
                 bot.answer_callback_query(call.id, "❗ В сокровищнице пусто", show_alert=True)
                 return
             if random.random() < chance:
-                pct = random.randint(5, 15)
+                pct = random.randint(0.1, 3)
                 amount = max(1, int(tre_bal * pct / 100.0))
                 _update_treasure_balance(-amount)
                 _update_balance(uid, amount)
@@ -1737,7 +1737,7 @@ def tre_callback_handler(bot, call):
             return
         if action == "ask":
             tre_bal = _get_treasure_balance()
-            amount = max(1, int(tre_bal * 0.001))
+            amount = max(1, int(tre_bal * 0.0001))
             if amount <= 0:
                 bot.send_message(call.message.chat.id, f"❗ {_display_name(uid)}, в сокровищнице сейчас нечего попросить.")
                 _tre_action_last[key] = now
@@ -1887,12 +1887,12 @@ def clan_join_handler(bot, message):
     uid = message.from_user.id
     # требование: в него как минимум Упадок (stage >=4)
     psych = _get_psych(uid)
-    if psych["stage"] >= 4:
+    if psych["stage"] > 4:
         bot.reply_to(message, "❌ Вступать можно только если у тебя состояние лучше или равно 'Упадок' (слабаков не берут).")
         return
     # провека бана
     if _is_banned_from_clan(clan_id, uid):
-        bot.reply_to(message, "❌ Ты забанен в этом клане.")
+        bot.reply_to(message, "❌ Ты безвозвратно исключён в этом клане.")
         return
     _add_member(clan_id, uid, "member")
     bot.reply_to(message, f"✅ Ты вступил в клан '{clan[1]}'.")
@@ -2062,7 +2062,7 @@ def clan_grind_handler(bot, message):
     clan_grind_handler._last_grind[uid] = now
     gained = random.randint(2,5)
     _clan_goods_add(clan_id, gained)
-    bot.reply_to(message, f"📦 Ты принёс {gained} товар(ов) в склад клана. Текущий склад: {_clan_goods_get(clan_id)}")
+    bot.reply_to(message, f"📦 С вылазки ты добыл запретных {gained} товар(ов) для склада клана. Текущий склад: {_clan_goods_get(clan_id)}")
 
 def clan_up_handler(bot, message):
     # /clan_up @user — Дон повышает до Капо. Кулдаун 36 часов на повышение для Дона
@@ -2981,7 +2981,7 @@ def register_extra_handlers(bot):
     # игры (команды pocket/casino/loto)
     @bot.message_handler(commands=['pocket'])
     def _h_pocket(m):
-        bet_game_handler(bot, m, 0.6, 2,
+        bet_game_handler(bot, m, 0.65, 2,
                          ["😎Молодец, воришка. Ты потерял свои деньги на ходу, но получил больше - аж {win} бублей!",
                           "✨❄️Моя школа! {win} тебе начислено за твой проворот."],
                          ["🙄Ну ты и лоханулся... мало того, что ты ничего не украл, так у тебя украли {bet}!",
@@ -2997,7 +2997,7 @@ def register_extra_handlers(bot):
 
     @bot.message_handler(commands=['loto'])
     def _h_loto(m):
-        bet_game_handler(bot, m, 0.15, 10.0,
+        bet_game_handler(bot, m, 0.10, 14.0,
                          ["🎟 Счастливый билет! +{win} бублей (ставка {bet}).",
                           "🌟 Умный человек в очках выиграл {win} бублей скачать обои"],
                          ["🪙 Ой-ой-ой, не повезло. Ставка в аж {bet} бублей ушла в воздух.",
