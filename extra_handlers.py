@@ -2136,7 +2136,7 @@ def clan_war_handler(bot, message):
         bot.reply_to(message, "❌ Ваш клан слишком молод для объявления войны (меньше 2 часов после создания).")
         return
     # clan cooldown 4 hours
-    if time.time() - last_war_ts < 4*3600:
+    if time.time() - last_war_ts < 25*60:
         bot.reply_to(message, "⏳ Ваш клан недавно объявлял войну — подождите.")
         return
     # compute HPs: HP каждого участника (base 100 + property bonuses) * (sum of tokens of don+capo)
