@@ -894,7 +894,7 @@ def bubl_callback_handler(bot, call):
             pass
         fake = SimpleNamespace(text=f"/{game} {bet}", from_user=call.from_user, chat=call.message.chat)
         mapping = {
-            "pocket": (0.65, 2,
+            "pocket": (0.72, 1.25,
                        ["😎Молодец, воришка. Ты потерял свои деньги на ходу, но получил больше - аж {win} бублей!",
                         "✨❄️Моя школа! {win} тебе начислено за твой проворот."],
                        ["🙄Ну ты и лоханулся... мало того, что ты ничего не украл, так у тебя украли {bet}!",
